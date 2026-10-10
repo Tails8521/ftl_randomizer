@@ -1,0 +1,18 @@
+[package]
+name = "ftl_randomizer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+image = "0.25"
+quick-xml = "0.41.0"
+
+# Test probes. Cargo does not auto-discover binaries in subdirectories of
+# src/bin, so each one is declared here. They are not part of the final binary.
+[[bin]]
+name = "repack_dat"
+path = "src/bin/probes/repack_dat.rs"
+
+[[bin]]
+name = "visualize_ship"
+path = "src/bin/probes/visualize_ship.rs"
