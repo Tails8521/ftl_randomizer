@@ -1,4 +1,5 @@
 - Documentation for the final user (readme etc.) must be human written.
 - Use PROGRESS.md to document progress for AI agents. The file is not commited and human coders can prune it once the plans it refers to become stale.
 - Agents can add comments in code but no need to overdo it, no need to state the obvious.
-- Probes for testing should be in src/bin/probes. They won't be used for the final binary.
+- Probes for testing should be named src/bin_probe_*. They won't be used for the final binary.
+- Do not make assumptions about FTL game mechanisms. Ask the user if unsure rather than assuming.

@@ -1,6 +1,6 @@
-const MIN_EFFECTIVE_MISSILES: i8 = 28;
+pub const MIN_EFFECTIVE_MISSILES: i8 = 28;
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum WeaponType {
     BEAM,
     BOMB,
@@ -9,19 +9,20 @@ pub enum WeaponType {
     MISSILES,
 }
 
+#[derive(Clone, Copy)]
 pub struct StartingWeapon {
-    name: &'static str,
-    weapon_type: WeaponType,
-    power: i8,
-    sp: i8, // shield piercing
-    damage: i8,
-    shots: i8, //default to 1 if not present
-    ion: i8,
-    missiles: i8,
-    charge_levels: i8, //default to 1 if not present
+    pub name: &'static str,
+    pub weapon_type: WeaponType,
+    pub power: i8,
+    pub sp: i8, // shield piercing
+    pub damage: i8,
+    pub shots: i8, //default to 1 if not present
+    pub ion: i8,
+    pub missiles: i8,
+    pub charge_levels: i8, //default to 1 if not present
 }
 
-const ALLOWED_STARTING_WEAPONS_NAMES : [&'static str; 51] = [
+pub const ALLOWED_STARTING_WEAPONS_NAMES : [&'static str; 51] = [
     "LASER_BURST_1", // Basic Laser
     "LASER_BURST_2", // Dual Lasers
     "LASER_BURST_2_A", // Burst Laser I
@@ -103,10 +104,13 @@ impl StartingWeapon {
                 return false;
             }
         }
-        if self.sp > 1 {
+        if self.weapon_type == WeaponType::BURST { // Flak weapons
             return true;
         }
-        if self.shots * self.charge_levels > 1 {
+        if self.sp >= 1 {
+            return true;
+        }
+        if self.shots * self.charge_levels > 1 && self.damage > 0 {
             return true;
         }
         if self.damage > 0 && other_weapons.any(|w| w.can_break_shield()) {
@@ -132,7 +136,7 @@ impl StartingWeapon {
     }
 }
 
-fn is_weapon_loadout_viable(starting_weapons: &[StartingWeapon], effective_missiles: i8) -> bool {
+pub fn is_weapon_loadout_viable(starting_weapons: &[StartingWeapon], effective_missiles: i8) -> bool {
     starting_weapons.iter().enumerate().any(|(i, w1)| {
         w1.qualifies_as_good_enough(effective_missiles, starting_weapons.iter().enumerate().filter_map(|(j, w2)| if i != j {Some(w2)} else {None}))
     })
