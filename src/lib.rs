@@ -22,6 +22,8 @@
 //! unmodified archive and write it again and you get the same bytes, which is
 //! what makes the format understood rather than merely tolerated.
 
+mod randomizer;
+
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
