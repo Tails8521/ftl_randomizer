@@ -22,7 +22,9 @@
 //! unmodified archive and write it again and you get the same bytes, which is
 //! what makes the format understood rather than merely tolerated.
 
+pub mod layout;
 pub mod randomizer;
+pub mod rng;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
