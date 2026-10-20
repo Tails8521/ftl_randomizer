@@ -1,8 +1,9 @@
 //! Probe: how the ships the game ships with fill their system rooms.
 //!
-//! The randomizer gives every system a room of its own, and the 30 player
-//! blueprints are the only sample of what a system room may look like. This reads
-//! their rooms, doors, `<slot>`s and `<img>`s, and prints, per kind of system:
+//! The randomizer gives every system a room of its own, and the 28 blueprints of
+//! the ships a player chooses are the only sample of what a system room may look
+//! like. This reads their rooms, doors, `<slot>`s and `<img>`s, and prints, per kind
+//! of system:
 //!
 //! * the shapes of room the kind is given (1x2, 2x1, 2x2),
 //! * the tile of the room the station stands on and the wall it faces, which with
@@ -72,26 +73,17 @@ struct Plan {
 }
 
 impl Plan {
-    /// The same configuration as `src/blueprints.rs` writes it.
-    fn lib(&self) -> blueprints::Plan {
-        blueprints::Plan { w: self.w, h: self.h, number: self.number, side: self.side }
-    }
-
-    /// `2x1 1 right`, `2x2 -2 none`.
-    fn label(&self) -> String {
-        format!(
-            "{}x{} {} {}",
-            self.w,
-            self.h,
-            self.number,
-            self.side.map(|side| side.name()).unwrap_or("none")
-        )
-    }
-
-    /// true when the tile is not in a room of the plan's own shape, which leaves a
-    /// station the player cannot reach.
+    /// true when the tile the configuration names is not in the room at all.
     fn out_of_room(&self) -> bool {
         self.number >= self.w * self.h
+    }
+
+    /// How a configuration reads in a table.
+    fn label(&self) -> String {
+        match self.side {
+            Some(side) => format!("{}x{} {} {}", self.w, self.h, self.number, side.name()),
+            None => format!("{}x{} tile {}", self.w, self.h, self.number),
+        }
     }
 }
 
@@ -111,7 +103,9 @@ struct Record {
     name: String,
     /// The kind of room, with `medbay` and `clonebay` counted as `bay`.
     kind: String,
-    img: String,
+    /// The art the system names, `None` when it names none and the game is left to
+    /// draw the art of the system's own name.
+    img: Option<String>,
     /// The shape of the room the system sits in.
     shape: (i32, i32),
     /// The station or the blocked tile, when the kind has one.
@@ -164,6 +158,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             {
                 continue;
             }
+            // The Kestrel of the tutorial and of the easy start share the hull of
+            // Kestrel A, and are not ships a player chooses.
+            if blueprints::SKIP.contains(&ship.name.as_str()) {
+                continue;
+            }
             if !layouts.contains_key(&ship.layout) {
                 let bytes = fs::read(format!("{data}/{}.txt", ship.layout))?;
                 let mut txt =
@@ -187,9 +186,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Some(kind) => per_ship(&records, &kind),
         None => {
             summary(&records);
-            whitelist(&records);
-            art_map(&records);
-            audit(&records, &root);
+            art_map(&records, &root);
+            art_tuples(&records);
+            audit(&records, &stock_of(ROOT)?);
             disagreements(&records);
         }
     }
@@ -202,9 +201,7 @@ fn read(ship: &str, rooms: &[Room], doors: &[Door], text: &str, system: &Element
     let kind = kind(&name).to_string();
     let tag = &text[system.tag.start..system.tag.end];
     let room = blueprints::attribute(tag, "room").and_then(|(_, value)| value.parse::<usize>().ok());
-    let img = blueprints::attribute(tag, "img")
-        .map(|(_, value)| value.to_string())
-        .unwrap_or_else(|| "-".to_string());
+    let img = blueprints::attribute(tag, "img").map(|(_, value)| value.to_string());
     let Some(where_) = room.and_then(|room| rooms.get(room)) else {
         // The system names a room the layout does not draw, which no shipped
         // blueprint does.
@@ -236,12 +233,20 @@ fn read(ship: &str, rooms: &[Room], doors: &[Door], text: &str, system: &Element
     }
 }
 
+impl Record {
+    /// How the art of a system reads in a table: the file it names, the dash it names,
+    /// or that it names none and the game draws the art of the system's own name.
+    fn art(&self) -> String {
+        self.img.clone().unwrap_or_else(|| "(none)".to_string())
+    }
+}
+
 /// A record of a system with no station, with what the probe still knows of it.
 fn none(
     ship: &str,
     name: String,
     kind: String,
-    img: String,
+    img: Option<String>,
     shape: (i32, i32),
     filed: bool,
 ) -> Record {
@@ -371,9 +376,9 @@ fn summary(records: &[Record]) {
             line("behind", list(walls.iter().map(|(what, seen)| format!("{what} {seen}"))));
         }
 
-        let mut art: BTreeMap<(&String, (i32, i32)), usize> = BTreeMap::new();
+        let mut art: BTreeMap<(String, (i32, i32)), usize> = BTreeMap::new();
         for record in mine.iter() {
-            *art.entry((&record.img, record.shape)).or_default() += 1;
+            *art.entry((record.art(), record.shape)).or_default() += 1;
         }
         line("art", list(art.iter().map(|((img, (w, h)), seen)| format!("{img} {w}x{h} {seen}"))));
     }
@@ -409,7 +414,7 @@ fn per_ship(records: &[Record], only: &str) {
             plan.side.map(|side| side.name()).unwrap_or("-"),
             if record.filed { "filed" } else { "default" },
             behind,
-            record.img,
+            record.art(),
         );
     }
 }
@@ -419,53 +424,85 @@ fn plus(door: bool) -> &'static str {
     if door { "+door" } else { "" }
 }
 
-/// Every configuration of every kind, as the list of `src/blueprints.rs` is written,
-/// so the two can be read side by side. The unreachable ones are left out: they are
-/// a bug of the shipped data, not a configuration to copy.
-fn whitelist(records: &[Record]) {
-    let found = kinds(records);
-    println!("\nconfigurations these ships draw, as src/blueprints.rs writes its list");
-    println!("const WHITELIST: [(&str, &[Plan]); {}] = [", found.len());
-    for kind in found {
-        let body = plans_of(records, kind)
-            .into_iter()
-            .map(|plan| match plan.side {
-                Some(side) => {
-                    format!("at({}, {}, {}, Side::{:?})", plan.w, plan.h, plan.number, side)
-                }
-                None => format!("machine({}, {}, {})", plan.w, plan.h, plan.number),
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        println!("    (\"{kind}\", &[{body}]),");
+/// The art of a room, per kind, per shape of room, per configuration: which files
+/// the shipped ships draw, and which file the game falls back on when a blueprint
+/// names none. This is the table `Stock` reads at run time - the art of a room
+/// paints its console at one tile against one wall, so it says where the crew stand
+/// and not only how big the room is.
+fn art_map(records: &[Record], root: &str) {
+    println!("\nthe art of a room, per shape and configuration");
+    for kind in kinds(records) {
+        let held: Vec<&Record> =
+            records.iter().filter(|record| record.kind == kind).collect();
+        let mut own: BTreeSet<String> = BTreeSet::new();
+        for record in held.iter() {
+            let file = format!("room_{}", record.name);
+            if let Some(cut) = art_shape(root, &file) {
+                own.insert(format!("{file} {:?}", cut));
+            }
+        }
+        let stock = if own.is_empty() {
+            "none".to_string()
+        } else {
+            list(own.into_iter())
+        };
+        println!("  {kind}: drawn from its own name: {stock}");
+
+        let mut rows: BTreeMap<((i32, i32), String), BTreeMap<String, usize>> = BTreeMap::new();
+        for record in held.iter() {
+            let plan = match record.plan {
+                Some(plan) if !plan.out_of_room() => format!("{}", spot(plan)),
+                Some(_) => "unreachable".to_string(),
+                None => "no slot".to_string(),
+            };
+            *rows.entry((record.shape, plan)).or_default().entry(record.art()).or_default() +=
+                1;
+        }
+        for ((w, h), plan) in rows.keys() {
+            let files = rows[&((*w, *h), plan.clone())]
+                .iter()
+                .map(|(img, seen)| {
+                    let cut = match img.as_str() {
+                        // The dash names no art at all, and "(none)" is this probe's
+                        // word for a tag that named none, which leaves it to the art of
+                        // the system's own name.
+                        "-" | "(none)" => None,
+                        _ => art_shape(root, img),
+                    };
+                    let fits = match cut {
+                        None => "*",
+                        Some(cut) if cut == (*w, *h) => "",
+                        Some(_) => "!!",
+                    };
+                    format!("{img} x{seen}{fits}")
+                });
+            println!("    {w}x{h}  {plan:14} {}", list(files));
+        }
     }
-    println!("];");
+}
+
+/// The tile and the wall of a configuration, without the shape it belongs to.
+fn spot(plan: Plan) -> String {
+    match plan.side {
+        Some(side) => format!("{} {}", plan.number, side.name()),
+        None => format!("machine tile {}", plan.number),
+    }
 }
 
 /// The art of a room, and what it is filed with: the art each kind files per shape
 /// of room, and the configuration every piece of art is ever filed with. Answers
 /// whether the art alone says where the crew stand.
-fn art_map(records: &[Record]) {
+fn art_tuples(records: &[Record]) {
     println!("\nthe art of a room, and what it is filed with");
-    let mut tuples: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    let mut tuples: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for kind in kinds(records) {
-        let mut by_shape: BTreeMap<(i32, i32), BTreeMap<&str, usize>> = BTreeMap::new();
-        for record in records.iter().filter(|record| record.kind == kind) {
-            *by_shape.entry(record.shape).or_default().entry(record.img.as_str()).or_default() += 1;
-        }
-        let what = list(by_shape.iter().map(|((w, h), imgs)| {
-            let art = list(imgs.iter().map(|(img, seen)| format!("{img} x{seen}")));
-            format!("{w}x{h} [{art}]")
-        }));
-        println!("  {kind:9} {what}");
-
         for record in records.iter().filter(|record| record.kind == kind) {
             let Some(plan) = record.plan.filter(|plan| !plan.out_of_room()) else { continue };
-            if record.img == "-" {
+            if record.img.is_none() {
                 continue;
             }
             tuples
-                .entry(record.img.as_str())
+                .entry(record.art())
                 .or_default()
                 .insert(format!("{} {}", record.kind, plan.label()));
         }
@@ -502,104 +539,71 @@ fn art_shape(root: &str, img: &str) -> Option<(i32, i32)> {
     (shape.0 > 0 && shape.1 > 0).then_some(shape)
 }
 
-/// The configurations one kind draws, shortest first, each named once.
-fn plans_of(records: &[Record], kind: &str) -> Vec<Plan> {
-    records
-        .iter()
-        .filter(|record| record.kind == kind)
-        .filter_map(|record| record.plan)
-        .filter(|plan| !plan.out_of_room())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+/// The ships the game ships with, read the way `src/blueprints.rs` reads them: per
+/// kind of room, the configurations of the station or the machine and the art filed
+/// with them. A mod is measured against this, which is why it is read out of the
+/// shipped files and not out of the mod.
+fn stock_of(root: &str) -> Result<blueprints::Stock, Box<dyn std::error::Error>> {
+    let mut stock = blueprints::Stock::default();
+    for file in FILES {
+        let Ok(text) = fs::read_to_string(format!("{root}/data/{file}")) else {
+            continue;
+        };
+        for ship in blueprints::blueprints(&text)? {
+            if !Path::new(&format!("{root}/img/ship/{}_base.png", ship.layout)).exists() {
+                continue;
+            }
+            let shapes = shapes_of(root, &ship.layout)?;
+            blueprints::gather(&text, &ship, &shapes, &mut stock)?;
+        }
+    }
+    Ok(stock)
 }
 
-/// The list of `src/blueprints.rs` held against these ships: what they draw that the
-/// list does not hold, and what the list holds that nothing draws.
+/// The shape of every room of a layout, as its own `.txt` has it.
+fn shapes_of(root: &str, layout: &str) -> Result<Vec<(i32, i32)>, Box<dyn std::error::Error>> {
+    let bytes = fs::read(format!("{root}/data/{layout}.txt"))?;
+    let txt = ShipTxt::parse(bytes).map_err(|why| format!("{layout}.txt: {why}"))?;
+    Ok(txt.rooms.iter().map(|room| (room.w, room.h)).collect())
+}
+
+/// The ships the game ships with held against these: every system has to stand in a
+/// room the shipped ships drew a system of its kind in, with the station and the art a
+/// shipped ship filed with it. That is the rule of `src/blueprints.rs`, and this says
+/// whether it held.
 ///
-/// Two rules of the randomizer drop configurations on purpose: a station never faces
-/// into its own room, which is what the hacking system of the Circle C files, and a
-/// bay of a thin room blocks no tile, while six shipped bays block one.
-fn audit(records: &[Record], root: &str) {
-    println!("\nthe list of src/blueprints.rs held against these ships");
-    let mut dropped = 0;
+/// Two rules of the randomizer leave shipped configurations out on purpose: a station
+/// never faces into its own room, which is what the hacking system of the Circle C
+/// files, and a bay of a thin room blocks no tile, while six shipped bays block one.
+fn audit(records: &[Record], shipped: &blueprints::Stock) {
+    println!("\nthe shipped ships held against these");
+    let mut off = 0;
     for kind in kinds(records) {
-        let listed: Vec<blueprints::Plan> = blueprints::WHITELIST
-            .iter()
-            .find(|(name, _)| *name == kind)
-            .map(|(_, plans)| plans.to_vec())
-            .unwrap_or_default();
-        let mut off: BTreeMap<Plan, usize> = BTreeMap::new();
-        for plan in plans_of(records, kind) {
-            if !listed.contains(&plan.lib()) {
-                *off.entry(plan).or_default() += 1;
+        let rows = shipped.rows(kind);
+        let mut bad: BTreeMap<String, usize> = BTreeMap::new();
+        for record in records.iter().filter(|record| record.kind == kind) {
+            let (number, side) = match record.plan {
+                Some(plan) => (plan.number, plan.side),
+                None => (blueprints::NO_SLOT, None),
+            };
+            if rows
+                .iter()
+                .any(|row| row.number == number && row.side == side && row.img == record.img)
+            {
+                continue;
             }
+            let wall = side.map(|side| side.name()).unwrap_or("-");
+            *bad.entry(format!("{number} {wall} {}", record.art())).or_default() += 1;
+            off += 1;
         }
-        if off.is_empty() {
+        if bad.is_empty() {
             continue;
         }
-        dropped += off.len();
-        let what = list(
-            off.iter().map(|(plan, drawn)| format!("{} x{}", plan.label(), drawn)),
-        );
-        println!("  {kind} is drawn as {what}, which is not on the list");
+        let what = list(bad.iter().map(|(plan, seen)| format!("[{plan}] x{seen}")));
+        println!("  {kind} is drawn as {what}, which no shipped ship filed");
     }
-    if dropped == 0 {
-        println!("  nothing is drawn off the list");
-    }
-
-    let unused = list(blueprints::WHITELIST.iter().filter_map(|(kind, listed)| {
-        let left: Vec<String> = listed
-            .iter()
-            .filter(|plan| {
-                !records.iter().filter_map(|r| r.plan).any(|seen| seen.lib() == **plan)
-            })
-            .map(|plan| format!("{}x{} {}", plan.w, plan.h, plan.number))
-            .collect();
-        (!left.is_empty()).then(|| format!("{kind}: {}", list(left.into_iter())))
-    }));
-    println!(
-        "  on the list but drawn by no ship: {}",
-        if unused.is_empty() {
-            "none"
-        } else {
-            &unused
-        }
-    );
-
-    let mut shapes: BTreeMap<&String, BTreeSet<(i32, i32)>> = BTreeMap::new();
-    for record in records.iter() {
-        shapes.entry(&record.img).or_default().insert(record.shape);
-    }
-
-    // The art of a room is cut for its shape, so a system moved into a room of
-    // another shape is drawn with art that does not fit the room.
-    let cut = records
-        .iter()
-        .filter(|record| art_shape(root, &record.img).is_some_and(|shape| shape == record.shape))
-        .count();
-    let drawn = records.iter().filter(|record| art_shape(root, &record.img).is_some()).count();
-    let unfit = list(records.iter().filter_map(|record| {
-        let cut = art_shape(root, &record.img)?;
-        (cut != record.shape)
-            .then(|| format!("{} of {} in a {}x{}", record.img, record.kind, record.shape.0, record.shape.1))
-    }));
-    println!("  art: {cut} of {drawn} rooms hold the art they were cut for");
-    if !unfit.is_empty() {
-        println!("  art cut for another shape: {unfit}");
-    }
-    let pure = shapes.values().filter(|shape| shape.len() == 1).count();
-    println!("  art: {pure} of {} system imgs are drawn in one shape of room", shapes.len());
-    let mixed = list(
-        shapes
-            .iter()
-            .filter(|(_, shape)| shape.len() > 1)
-            .map(|(img, shape)| {
-                format!("{img} ({})", list(shape.iter().map(|(w, h)| format!("{w}x{h}"))))
-            }),
-    );
-    if !mixed.is_empty() {
-        println!("  drawn in more than one: {mixed}");
+    if off == 0 {
+        println!("  every room here is one a shipped ship filed the same way");
     }
 }
 

@@ -122,9 +122,10 @@ pub fn randomize(archive: &mut FtlArchive, rng: &mut Rng) -> Result<Report> {
     // base image for it, which enemy ships do not have.
     let mut wanted: BTreeMap<String, LayoutRequest> = BTreeMap::new();
     let mut drivers: BTreeMap<String, Vec<Driver>> = BTreeMap::new();
-    // The room art the game ships, read before any blueprint is moved: the room a
-    // system sits in says what shape its art was cut for.
-    let mut art = blueprints::RoomArt::default();
+    // What the shipped ships draw, read before any blueprint is moved: the room a
+    // system sits in, the station its crew stand at and the art its tag names are one
+    // configuration, and they are the rule for where a system may be moved.
+    let mut stock = blueprints::Stock::default();
     for (path, text) in &texts {
         for blueprint in lists[path].iter() {
             if archive.get_file(&base_image(&blueprint.layout)).is_none() {
@@ -142,7 +143,7 @@ pub fn randomize(archive: &mut FtlArchive, rng: &mut Rng) -> Result<Report> {
                 .entry(blueprint.layout.clone())
                 .or_default()
                 .push(Driver { path: path.clone(), blueprint: blueprint.clone() });
-            blueprints::gather(text, blueprint, &vanilla(archive, &blueprint.layout), &mut art)
+            blueprints::gather(text, blueprint, &vanilla(archive, &blueprint.layout), &mut stock)
                 .map_err(|why| Error::Unreadable { path: path.clone(), why })?;
         }
     }
@@ -158,11 +159,11 @@ pub fn randomize(archive: &mut FtlArchive, rng: &mut Rng) -> Result<Report> {
         // wrong shape are no use to a piloting station, and no amount of squeezing
         // makes a thin room out of a square one.
         let mut tries = 1;
-        while tries < LAYOUT_TRIES && !houses(&drivers[layout], &texts, &drawn.layout) {
+        while tries < LAYOUT_TRIES && !houses(&drivers[layout], &texts, &drawn.layout, &stock) {
             drawn = redraw(archive, rng, layout, request, &txt_path)?;
             tries += 1;
         }
-        if !houses(&drivers[layout], &texts, &drawn.layout) {
+        if !houses(&drivers[layout], &texts, &drawn.layout, &stock) {
             warnings.push(format!(
                 "{} was drawn {tries} times without rooms for every system of {}",
                 layout,
@@ -178,7 +179,7 @@ pub fn randomize(archive: &mut FtlArchive, rng: &mut Rng) -> Result<Report> {
     // Then the systems, into those rooms.
     let mut moves = Vec::new();
     for (path, text) in &texts {
-        let edit = blueprints::randomize(text, &rooms_of, &art, rng)
+        let edit = blueprints::randomize(text, &rooms_of, &stock, rng)
             .map_err(|why| Error::Unreadable { path: path.clone(), why })?;
         let Some(edit) = edit else { continue };
         for change in &edit.changes {
@@ -235,10 +236,15 @@ struct Driver {
 }
 
 /// true when the rooms house every blueprint that drives a layout.
-fn houses(drivers: &[Driver], texts: &BTreeMap<String, String>, layout: &Layout) -> bool {
+fn houses(
+    drivers: &[Driver],
+    texts: &BTreeMap<String, String>,
+    layout: &Layout,
+    stock: &blueprints::Stock,
+) -> bool {
     drivers
         .iter()
-        .all(|driver| blueprints::houses(&texts[&driver.path], &driver.blueprint, layout))
+        .all(|driver| blueprints::houses(&texts[&driver.path], &driver.blueprint, layout, stock))
 }
 
 /// What `redraw` made of a ship.
