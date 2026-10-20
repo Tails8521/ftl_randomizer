@@ -28,6 +28,7 @@ pub mod layout;
 pub mod randomizer;
 pub mod rooms;
 pub mod rng;
+pub mod ship_art;
 pub mod ship_txt;
 
 use std::borrow::Cow;

@@ -240,13 +240,21 @@ fn redraw(
     // rooms that begin further right or lower slide the ship art sideways. No
     // layout in the game puts a room below tile 0 either.
     let box_of_ship = txt.bounds();
-    let mask: BTreeSet<(i32, i32)> = match box_of_ship {
-        Some((low_x, low_y, high_x, high_y)) => mask
-            .into_iter()
-            .filter(|(x, y)| *x >= low_x && *x <= high_x && *y >= low_y && *y <= high_y)
-            .collect(),
-        None => mask,
-    };
+    // The tiles the shipped rooms stand on are deck by definition, even where the
+    // art is not fully painted - the game draws its own floor there. They are the
+    // only tiles added to the strict mask, so nothing sticks out further than the
+    // shipped ship does, and the anchor lines are always reachable.
+    let shipped: BTreeSet<(i32, i32)> = txt.rooms.iter().flat_map(Room::tiles).collect();
+    let mask: BTreeSet<(i32, i32)> = mask
+        .into_iter()
+        .filter(|(x, y)| match box_of_ship {
+            Some((low_x, low_y, high_x, high_y)) => {
+                *x >= low_x && *x <= high_x && *y >= low_y && *y <= high_y
+            }
+            None => true,
+        })
+        .chain(shipped)
+        .collect();
     // Where the art stops short of the box, its own corner is the furthest a room
     // can go, and the art will sit that much off. Worth a warning either way.
     let anchor = match box_of_ship {

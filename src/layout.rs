@@ -119,11 +119,9 @@ pub fn generate(mask: &BTreeSet<Tile>, rng: &mut Rng, min_rooms: usize, anchor: 
     Layout { rooms, doors }
 }
 
-/// Tiles a room may cover in a base image: the tile has three quarters of its
-/// pixels opaque or better. The game paints its own floor under a room, so a tile
-/// only has to look like deck, and the vanilla layouts do use tiles that are not
-/// fully covered - measured over the 28 player hulls, this share leaves every tile
-/// the shipped rooms stand on.
+/// Tiles a room may cover in a base image: every `TILE * TILE` pixel of the tile
+/// has alpha 255. Strict on purpose, it keeps rooms clear of the deck art, the
+/// crystal spikes and the hull edge, and it costs only a few tiles.
 ///
 /// `origin` is the pixel of tile `(0, 0)` inside the image, which is
 /// `x = -img_x + HORIZONTAL`, `y = -img_y + VERTICAL`: the corner of the art from
@@ -133,7 +131,7 @@ pub fn hull_mask(base: &RgbaImage, origin: (i32, i32)) -> BTreeSet<Tile> {
     let mut mask = BTreeSet::new();
     for ty in -2..=(height as i32 / TILE + 2) {
         for tx in -2..=(width as i32 / TILE + 2) {
-            if deck(base, origin, tx, ty) {
+            if opaque(base, origin, tx, ty) {
                 mask.insert((tx, ty));
             }
         }
@@ -141,17 +139,15 @@ pub fn hull_mask(base: &RgbaImage, origin: (i32, i32)) -> BTreeSet<Tile> {
     mask
 }
 
-fn deck(base: &RgbaImage, origin: (i32, i32), tx: i32, ty: i32) -> bool {
+fn opaque(base: &RgbaImage, origin: (i32, i32), tx: i32, ty: i32) -> bool {
     let (width, height) = base.dimensions();
     let (x0, y0) = (origin.0 + tx * TILE, origin.1 + ty * TILE);
     if x0 < 0 || y0 < 0 || x0 + TILE > width as i32 || y0 + TILE > height as i32 {
         return false;
     }
-    let solid = (y0..y0 + TILE)
+    (y0..y0 + TILE)
         .flat_map(|y| (x0..x0 + TILE).map(move |x| (x, y)))
-        .filter(|(x, y)| base.get_pixel(*x as u32, *y as u32)[3] == 255)
-        .count();
-    solid * 4 >= (TILE * TILE) as usize * 3
+        .all(|(x, y)| base.get_pixel(x as u32, y as u32)[3] == 255)
 }
 
 // ------------------------------------------------------------------- rooms --

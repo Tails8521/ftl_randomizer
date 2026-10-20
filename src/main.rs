@@ -14,14 +14,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ftl_randomizer::ftl_mod::FtlMod;
 use ftl_randomizer::rng::Rng;
-use ftl_randomizer::{rooms, FtlArchive};
+use ftl_randomizer::{rooms, ship_art, FtlArchive};
+use std::collections::BTreeMap;
 
 const NAME: &str = "Random Rooms";
 const VERSION: &str = "0.1";
 const AUTHOR: &str = "ftl_randomizer";
-const DESCRIPTION: &str = "Every player ship gets a new room layout, and every system \
-                           a room of its own. Built from one seed: the same seed \
-                           builds the same ships.";
+const DESCRIPTION: &str = "Every player ship gets a new room layout, every system \
+                           a room of its own, and every ship a new colour. Built \
+                           from one seed: the same seed builds the same ships.";
 
 const USAGE: &str = "\
 randomize the room layout of the 28 player ships of an ftl.dat
@@ -38,6 +39,7 @@ OPTIONS:
   --ftl PATH     write the mod for a mod manager  (default out/random_rooms.ftl)
   --no-dat       do not write the archive
   --no-ftl       do not write the mod
+  --no-hue       leave the ship art its own colours
   --extract DIR  also unpack every file of the result under DIR
   --systems      print the room each system was moved into
   --help         this text
@@ -53,6 +55,7 @@ struct Args {
     ftl: Option<PathBuf>,
     extract: Option<PathBuf>,
     systems: bool,
+    hue: bool,
 }
 
 fn main() -> ExitCode {
@@ -81,19 +84,33 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut rng = Rng::new(args.seed);
     let report = rooms::randomize(&mut archive, &mut rng)?;
 
+    // Then the colours. Every layout turns by its own angle, its gibs with it.
+    let mut changed = report.changed.clone();
+    let mut hues: BTreeMap<String, i32> = BTreeMap::new();
+    if args.hue {
+        let layouts: Vec<String> = report.ships.iter().map(|ship| ship.layout.clone()).collect();
+        let art = ship_art::recolour(&mut archive, &mut rng, &layouts)?;
+        hues = art.degrees;
+        changed.extend(art.changed);
+    }
+
     println!("seed {}", args.seed);
     println!(
-        "{:<22}{:>6}{:>7}{:>7}{:>9}  blueprints",
-        "layout", "hull", "rooms", "doors", "airlocks"
+        "{:<22}{:>6}{:>7}{:>7}{:>9}{:>6}  blueprints",
+        "layout", "hull", "rooms", "doors", "airlocks", "hue"
     );
     for ship in &report.ships {
         println!(
-            "{:<22}{:>6}{:>7}{:>7}{:>9}  {}",
+            "{:<22}{:>6}{:>7}{:>7}{:>9}{:>6}  {}",
             ship.layout,
             ship.hull,
             ship.rooms,
             ship.doors,
             ship.airlocks,
+            match hues.get(&ship.layout) {
+                Some(angle) => format!("{angle}°"),
+                None => "-".to_string(),
+            },
             ship.blueprints.join(", ")
         );
     }
@@ -121,7 +138,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some(path) = &args.ftl {
         let mut module = FtlMod::new();
-        for changed in &report.changed {
+        for changed in &changed {
             let payload = archive
                 .get_file(changed)
                 .ok_or_else(|| io::Error::other(format!("the archive lost {changed}")))?;
@@ -145,7 +162,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "unpacked the result under {}, {} files changed",
             dir.display(),
-            report.changed.len()
+            changed.len()
         );
     }
     Ok(())
@@ -160,6 +177,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     let mut ftl = Some(PathBuf::from("out/random_rooms.ftl"));
     let mut extract = None;
     let mut systems = false;
+    let mut hue = true;
 
     let mut at = 0;
     while at < argv.len() {
@@ -175,6 +193,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             "--no-dat" => dat = None,
             "--no-ftl" => ftl = None,
             "--systems" => systems = true,
+            "--no-hue" => hue = false,
             other => {
                 seed = Some(other.parse().map_err(|_| {
                     format!("{other:?} is neither a seed nor a flag, see --help")
@@ -195,6 +214,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
         ftl,
         extract,
         systems,
+        hue,
     })
 }
 
