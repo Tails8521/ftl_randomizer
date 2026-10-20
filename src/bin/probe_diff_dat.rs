@@ -6,9 +6,10 @@ use std::io::Read;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let [a, b] = [args[0].as_str(), args[1].as_str()] else {
+    if args.len() < 2 {
         return Err("usage: probe_diff_dat <a.dat> <b.dat>".into());
-    };
+    }
+    let (a, b) = (args[0].as_str(), args[1].as_str());
     let mut one = Vec::new();
     let mut two = Vec::new();
     std::fs::File::open(a)?.read_to_end(&mut one)?;

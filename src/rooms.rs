@@ -138,6 +138,7 @@ pub fn randomize(archive: &mut FtlArchive, rng: &mut Rng) -> Result<Report> {
     for (layout, request) in &wanted {
         let txt_path = layout_txt(layout);
         let ship = redraw(archive, rng, layout, request, &txt_path)?;
+        warnings.extend(ship.note.clone());
         rooms_of.insert(layout.clone(), ship.rooms.clone());
         changed.push(txt_path);
         ships.push(ship.ship);
@@ -187,6 +188,8 @@ struct LayoutRequest {
 struct Drawn {
     ship: Ship,
     rooms: Vec<Room>,
+    /// Set when the hull art does not reach the box the layout shipped in.
+    note: Option<String>,
 }
 
 /// Draw one ship layout and write it over the one in the archive.
@@ -232,17 +235,35 @@ fn redraw(
         -img_y + txt.number("VERTICAL").unwrap_or(0),
     );
     let mask = layout::hull_mask(&art, origin);
-    // Rooms also stay inside the box the shipped layout used. No layout in the
-    // game puts a room below tile 0, or outside the box its own rooms make, so
-    // that box is the only ground the game is known to build on.
-    let mask: BTreeSet<(i32, i32)> = match txt.bounds() {
+    // Rooms stay inside the box the shipped layout used and start from its low
+    // corner: the game hangs the hull art off the low corner of the room grid, so
+    // rooms that begin further right or lower slide the ship art sideways. No
+    // layout in the game puts a room below tile 0 either.
+    let box_of_ship = txt.bounds();
+    let mask: BTreeSet<(i32, i32)> = match box_of_ship {
         Some((low_x, low_y, high_x, high_y)) => mask
             .into_iter()
             .filter(|(x, y)| *x >= low_x && *x <= high_x && *y >= low_y && *y <= high_y)
             .collect(),
         None => mask,
     };
-    let drawn = layout::generate(&mask, rng, request.rooms);
+    // Where the art stops short of the box, its own corner is the furthest a room
+    // can go, and the art will sit that much off. Worth a warning either way.
+    let anchor = match box_of_ship {
+        Some((low_x, low_y, _, _)) => (
+            mask.iter().map(|(x, _)| *x).min().unwrap_or(low_x).max(low_x),
+            mask.iter().map(|(_, y)| *y).min().unwrap_or(low_y).max(low_y),
+        ),
+        None => (0, 0),
+    };
+    let note = match box_of_ship {
+        Some((low_x, low_y, _, _)) if (low_x, low_y) != anchor => Some(format!(
+            "{}: the hull art stops at tile {},{} instead of {},{}, so its rooms start inside the box it shipped in",
+            layout, anchor.0, anchor.1, low_x, low_y
+        )),
+        _ => None,
+    };
+    let drawn = layout::generate(&mask, rng, request.rooms, anchor);
     let rooms = drawn.rooms.clone();
     let doors = drawn.doors.iter().filter(|door| !door.airlock()).count();
     let airlocks = drawn.doors.len() - doors;
@@ -260,6 +281,7 @@ fn redraw(
             blueprints: request.blueprints.clone(),
         },
         rooms,
+        note,
     })
 }
 

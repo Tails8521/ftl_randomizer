@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let Some(txt_bytes) = archive.get_file(&txt_path) else {
             continue;
         };
-        let txt = ShipTxt::parse(txt_bytes.to_vec()).map_err(|why| txt_path.clone())?;
+        let txt = ShipTxt::parse(txt_bytes.to_vec()).map_err(|_| txt_path.clone())?;
         let xml = archive
             .get_file(&format!("data/{layout_name}.xml"))
             .ok_or(txt_path.clone())?
@@ -106,6 +106,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .sum();
 
+        let edge = |column: bool, value: i32| {
+            box_tiles
+                .iter()
+                .filter(|(x, y)| if column { *x == value } else { *y == value })
+                .filter(|tile| coverage(&art, origin, **tile) >= 0.75)
+                .count()
+        };
+        let edges = format!(
+            "  edges {} {} {} {}",
+            edge(true, min_x),
+            edge(true, max_x),
+            edge(false, min_y),
+            edge(false, max_y)
+        );
         println!(
             "{:<20} ({:>2},{:>2},{:>2},{:>2}) {:>4} {:>4} {:>4}{}{}",
             layout_name,
@@ -116,7 +130,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             mask.len(),
             in_box.len(),
             vanilla_tiles,
-            line,
+            line + &edges,
             if vanilla_in_mask == vanilla_tiles {
                 ""
             } else {

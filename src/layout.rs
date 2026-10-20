@@ -38,6 +38,11 @@ const JITTER: u64 = 14;
 const SEED_TRIES: usize = 12;
 /// Growth passes a hull is given to reach its room count.
 const GROWTH_PASSES: usize = 400;
+/// How often one layout may be slid towards its anchor before the pass is given
+/// up on. Each slide moves a room or the whole layout, so a handful is plenty.
+const SETTLE_TRIES: usize = 8;
+/// How far a room may slide along the wall it is lifted onto the anchor with.
+const CROSS_REACH: i32 = 3;
 
 /// The room shapes, in the order a placement tries them from a random start.
 /// Five of the eight starts are a 2x2 block, so a block is tried first two times
@@ -100,9 +105,14 @@ pub struct Layout {
 /// [`hull_mask`]. `min_rooms` is the room count the ship has to reach, which is
 /// how many systems it has to house; a hull too small for it gets the most rooms
 /// it can hold.
-pub fn generate(mask: &BTreeSet<Tile>, rng: &mut Rng, min_rooms: usize) -> Layout {
+///
+/// `anchor` is the low corner the rooms have to start from, the low x and low y of
+/// the layout being replaced. The game hangs the hull art off that corner, so a
+/// layout that starts further right or lower than the shipped one slides the ship
+/// art sideways. The far edges are free to end wherever the hull lets them.
+pub fn generate(mask: &BTreeSet<Tile>, rng: &mut Rng, min_rooms: usize, anchor: Tile) -> Layout {
     let target = room_target(mask.len(), rng, min_rooms);
-    let rooms = grow(mask, rng, target);
+    let rooms = grow(mask, rng, target, anchor);
     let mut doors = wall_doors(&rooms, rng);
     link_rooms(&rooms, &mut doors, rng);
     doors.append(&mut airlocks(&rooms, mask, rng));
@@ -162,26 +172,164 @@ fn room_target(hull_tiles: usize, rng: &mut Rng, min_rooms: usize) -> usize {
     asked.clamp(floor, MAX_ROOMS as i64) as usize
 }
 
-/// Grow a layout, repeat the growth pass until it reaches the target room count.
-/// Every new room is pushed against a tile that is already used, so it shares a
-/// wall with a room that is already down and nothing ever has to be checked
-/// afterwards. What a pass can get wrong is the count: a pass that fills the hull
-/// in a clumsy order has nowhere left for the last room, which happens on the
-/// small hulls where three tenths of the tiles rounds up to the minimum of 15.
-/// Roughly one ship in ten on the 28 player hulls. Each pass draws a fresh
-/// layout, so the shortest one is only kept when none of them reaches the count.
-fn grow(mask: &BTreeSet<Tile>, rng: &mut Rng, target: usize) -> Vec<Room> {
+/// Grow a layout, repeat the growth pass until it reaches the target room count
+/// and stands on both anchor lines. Every new room is pushed against a tile that
+/// is already used, so it shares a wall with a room that is already down and
+/// nothing ever has to be checked afterwards. What a pass can get wrong is the
+/// count: a pass that fills the hull in a clumsy order has nowhere left for the
+/// last room, which happens on the small hulls where three tenths of the tiles
+/// rounds up to the minimum of 15. Roughly one ship in ten on the 28 player hulls.
+/// Each pass draws a fresh layout, so the shortest one is only kept when none of
+/// them reaches the count.
+fn grow(mask: &BTreeSet<Tile>, rng: &mut Rng, target: usize, anchor: Tile) -> Vec<Room> {
     let mut best: Vec<Room> = Vec::new();
+    let mut best_placed = false;
     for _ in 0..GROWTH_PASSES {
-        let rooms = grow_once(mask, rng, target);
-        if rooms.len() > best.len() {
+        let mut rooms = grow_once(mask, rng, target);
+        settle(&mut rooms, mask, anchor, rng);
+        let placed = reaches(&rooms, anchor) && rooms.len() >= target;
+        if (placed, rooms.len()) > (best_placed, best.len()) {
             best = rooms;
+            best_placed = placed;
         }
-        if best.len() >= target {
+        if best_placed {
             break;
         }
     }
     best
+}
+
+/// true when some room stands on each anchor line: one on the low column, one on
+/// the low row.
+fn reaches(rooms: &[Room], anchor: Tile) -> bool {
+    !rooms.is_empty()
+        && rooms.iter().any(|room| room.x <= anchor.0)
+        && rooms.iter().any(|room| room.y <= anchor.1)
+}
+
+/// Bring a finished layout onto its anchor, which most passes already are. True
+/// when both lines ended up covered.
+fn settle(rooms: &mut Vec<Room>, mask: &BTreeSet<Tile>, anchor: Tile, rng: &mut Rng) -> bool {
+    for _ in 0..rooms.len().min(SETTLE_TRIES) {
+        if reaches(rooms, anchor) || !slide(rooms, mask, anchor, rng) {
+            break;
+        }
+    }
+    reaches(rooms, anchor)
+}
+
+/// One step towards the anchor: the whole layout slides first, which keeps the
+/// ship as it was drawn, and failing that one room is lifted onto the line that is
+/// short. False when nothing could move, which ends the settling.
+fn slide(rooms: &mut Vec<Room>, mask: &BTreeSet<Tile>, anchor: Tile, rng: &mut Rng) -> bool {
+    let low_x = rooms.iter().map(|room| room.x).min().unwrap_or(0);
+    let low_y = rooms.iter().map(|room| room.y).min().unwrap_or(0);
+    let (need_x, need_y) = (anchor.0 - low_x, anchor.1 - low_y);
+
+    for (dx, dy) in [(need_x, need_y), (need_x, 0), (0, need_y)] {
+        if (dx, dy) == (0, 0) {
+            continue;
+        }
+        let shifted: Vec<Room> = rooms.iter().map(|room| shift(*room, dx, dy)).collect();
+        if shifted
+            .iter()
+            .all(|room| room.tiles().all(|tile| mask.contains(&tile)))
+        {
+            *rooms = shifted;
+            return true;
+        }
+    }
+
+    for (axis, need) in [(0, need_x), (1, need_y)] {
+        if need >= 0 {
+            continue;
+        }
+        // The rooms nearest the short line are the ones with the least to move.
+        // Shuffled first, because `sort_by_key` is stable and a key that asked the
+        // generator for a tie-break would not be a total order.
+        let mut order: Vec<usize> = (0..rooms.len()).collect();
+        rng.shuffle(&mut order);
+        order.sort_by_key(|&index| if axis == 0 { rooms[index].x } else { rooms[index].y });
+        for index in order {
+            let room = rooms[index];
+            let used: BTreeSet<Tile> = rooms
+                .iter()
+                .enumerate()
+                .filter(|(at, _)| *at != index)
+                .flat_map(|(_, other)| other.tiles())
+                .collect();
+            let along = if axis == 0 { room.y } else { room.x };
+            let steps: Vec<i32> = (0..=CROSS_REACH)
+                .flat_map(|step| [along + step, along - step])
+                .collect();
+            for offset in steps {
+                let moved = if axis == 0 {
+                    Room {
+                        x: anchor.0,
+                        y: offset,
+                        ..room
+                    }
+                } else {
+                    Room {
+                        x: offset,
+                        y: anchor.1,
+                        ..room
+                    }
+                };
+                if !fits(&moved, mask, &used) {
+                    continue;
+                }
+                let mut trial = rooms.clone();
+                trial[index] = moved;
+                if linked(&trial) {
+                    *rooms = trial;
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn shift(room: Room, dx: i32, dy: i32) -> Room {
+    Room {
+        x: room.x + dx,
+        y: room.y + dy,
+        ..room
+    }
+}
+
+/// true when every room shares a wall with the rest of the ship, walking room to
+/// room from the first one.
+fn linked(rooms: &[Room]) -> bool {
+    if rooms.len() < 2 {
+        return true;
+    }
+    let owner = owner_of(rooms);
+    let mut near: Vec<Vec<usize>> = vec![Vec::new(); rooms.len()];
+    for (&tile, &index) in &owner {
+        for delta in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            if let Some(&other) = owner.get(&(tile.0 + delta.0, tile.1 + delta.1))
+                && other != index
+            {
+                near[index].push(other);
+            }
+        }
+    }
+    let mut seen = vec![false; rooms.len()];
+    let mut queue = vec![0];
+    seen[0] = true;
+    let mut walked = 1;
+    while let Some(index) = queue.pop() {
+        for &other in &near[index] {
+            if !seen[other] {
+                seen[other] = true;
+                walked += 1;
+                queue.push(other);
+            }
+        }
+    }
+    walked == rooms.len()
 }
 
 /// One growth pass.

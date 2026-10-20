@@ -86,7 +86,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut airlock_total = 0;
     for name in &ships {
         let ship = load_ship(name)?;
-        let layout = layout::generate(&ship.mask, &mut rng, layout::MIN_ROOMS);
+        let anchor = (
+            ship.mask.iter().map(|(x, _)| *x).min().unwrap_or(0),
+            ship.mask.iter().map(|(_, y)| *y).min().unwrap_or(0),
+        );
+        let layout = layout::generate(&ship.mask, &mut rng, layout::MIN_ROOMS, anchor);
         let rooms = layout.rooms;
         let doors = layout.doors;
 
