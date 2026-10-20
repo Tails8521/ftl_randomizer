@@ -176,10 +176,24 @@ impl Stock {
         held
             .into_iter()
             .filter(|plan| plan.side.is_some() == stood)
-            // A thin bay is where the crew heal or are cloned, so its machine is
-            // filed off the floor. Only a 2x2 bay has a tile to spare for one.
-            .filter(|plan| kind != BAY || shape == (2, 2) || plan.number < 0)
             .collect()
+    }
+
+    /// The rows one system was drawn in, in a shape of room.
+    ///
+    /// The medbay of a thin bay blocks no tile, because the art of the room paints its
+    /// machine and no tile of a two tile room is to be stood on (user rule, and six
+    /// shipped blueprints), so the rows that file a tile are left out for it. The clone
+    /// bay has no art of its own - there is no `room_clonebay` file - and draws its
+    /// machine as a sprite on the tile it files, so it files a tile of its room even in
+    /// a thin bay, which is how all 48 shipped clone bays do it and what `-2` there
+    /// would break: the sprite lands outside the room, in the room above.
+    pub fn plans_for(&self, system: &str, shape: (i32, i32)) -> Vec<Plan> {
+        let mut rows = self.plans(system, shape);
+        if system == "medbay" && shape != (2, 2) {
+            rows.retain(|plan| plan.number < 0);
+        }
+        rows
     }
 
     /// Every configuration filed for a kind of room, in every shape, with nothing
@@ -373,7 +387,17 @@ pub fn gather(
             .or_else(|| default.and_then(|(_, wall, tile)| tile.map(|tile| (tile, *wall))))
             .unwrap_or((NO_SLOT, None));
         let img = attribute(tag, "img").map(|(_, value)| value.to_string());
-        stock.file(kind, Plan { w, h, number, side, img });
+        let plan = Plan { w, h, number, side, img };
+        // A bay is one room, so the medbay and the clone bay say together what shapes
+        // of room a bay takes. They are two machines though, and the shipped blueprints
+        // file them apart in a thin bay, so each is read on its own as well.
+        let kinds = match kind {
+            BAY => [kind, system.name.as_str()].to_vec(),
+            _ => vec![kind],
+        };
+        for kind in kinds {
+            stock.file(kind, plan.clone());
+        }
     }
     Ok(())
 }
@@ -463,22 +487,33 @@ fn assign(
         }
     };
 
-    // Then each group has its room and its configuration written. One configuration
-    // per group, so that a medbay and a clone bay - one machine, then the other, in
-    // the same room - file one tile rather than two.
+    // Then each system has its room, its station and its art written. One
+    // configuration is picked per system rather than per room, because a bay is one
+    // room with two machines: a 2x2 bay has them file one tile between them, and a thin
+    // one files nothing on the medbay and a tile on the clone bay, which is how the
+    // shipped blueprints file them.
     for (group, (kind, members)) in groups.iter().enumerate() {
         let room = room_of[group];
-        let picked = pick_plan(
-            text,
-            kind,
-            members,
-            &layout.rooms[room],
-            &layout.doors,
-            stock,
-            rng,
-            &mut change.warnings,
-        );
+        let where_ = &layout.rooms[room];
+        let mut shared: Option<i32> = None;
         for system in members {
+            let key = match *kind {
+                BAY => system.name.as_str(),
+                other => other,
+            };
+            let picked = pick_plan(
+                text,
+                key,
+                kind,
+                system,
+                where_,
+                &layout.doors,
+                shared,
+                stock,
+                rng,
+                &mut change.warnings,
+            );
+            shared = shared.or_else(|| picked.as_ref().and_then(|plan| plan.tile()));
             let raw = &text[system.tag.clone()];
             let (value, _) = attribute(raw, "room").expect("systems were picked for their room");
             patches.push((
@@ -493,7 +528,7 @@ fn assign(
                 text,
                 system,
                 picked.as_ref(),
-                &layout.rooms[room],
+                where_,
                 &mut change.warnings,
                 patches,
             );
@@ -722,21 +757,26 @@ fn attribute_span(text: &str, value: &Range<usize>) -> Option<Range<usize>> {
     Some(back..value.end + 1)
 }
 
-/// The configuration and the art a group of systems gets in the room it was handed,
-/// `None` when nothing was read of the kind of room and the system is best left as it
-/// was filed.
+/// The configuration and the art one system gets in the room it was handed, `None`
+/// when nothing was read of the kind of room and the system is best left as it was
+/// filed. `kind` is the row of the [`Stock`] to read, which is the system tag of a bay
+/// machine and the kind of room of anything else; `group` is the kind of room, which is
+/// what the defaults of the game are filed under.
 ///
 /// The art and the station are picked together, out of one row of the [`Stock`],
 /// because the art is painted around the station it shipped with: naming an art and a
 /// wall of its own choosing is how a crew ends up manning a blank wall. The row that
-/// keeps the art this ship filed comes first, then the rows that file the wall and the
-/// tile the ship filed, and one of the rest after that.
+/// keeps the art this ship filed comes first, then the row of the tile another machine
+/// of the same room files, then the rows that file the wall and the tile this blueprint
+/// filed, and one of the rest after that.
 fn pick_plan(
     text: &str,
     kind: &str,
-    members: &[&Element],
+    group: &str,
+    system: &Element,
     room: &Room,
     doors: &[Door],
+    shared: Option<i32>,
     stock: &Stock,
     rng: &mut Rng,
     warnings: &mut Vec<String>,
@@ -745,15 +785,12 @@ fn pick_plan(
         return None;
     }
     let shape = (room.w, room.h);
-    let free: Vec<Plan> = stock
-        .plans(kind, shape)
-        .into_iter()
-        .filter(|plan| stands(plan, room, doors))
-        .collect();
+    let listed = stock.plans_for(kind, shape);
+    let free: Vec<Plan> =
+        listed.iter().filter(|plan| stands(plan, room, doors)).cloned().collect();
     let pool = if free.is_empty() {
-        let listed = stock.plans(kind, shape);
         if listed.is_empty() {
-            return least_worst(kind, room, doors, text, members, stock, warnings, rng);
+            return least_worst(kind, group, room, doors, text, system, stock, warnings, rng);
         }
         warnings.push(format!(
             "{kind} has no wall here with the door off it, so its station faces a door"
@@ -766,9 +803,14 @@ fn pick_plan(
     // The art this ship filed, `None` when it filed none and the game was left to draw
     // the art of the system's own name. A row of the same art keeps a ship looking like
     // itself, and with it comes the station that art was painted around.
-    let named = members.iter().find_map(|system| image_of(text, system));
+    let named = image_of(text, system);
     let pool = prefer(pool, |plan| plan.img == named);
-    let (wall, tile) = wanted(text, kind, members);
+    // The tile another machine of this room files. The medbay and the clone bay are one
+    // machine and then the other, and 12 of the 13 shipped 2x2 bays that file one at all
+    // file the same tile for both. A thin bay has no tile the two can share - the medbay
+    // files none - and this rule then picks nothing.
+    let pool = prefer(pool, |plan| shared.is_none_or(|number| plan.number == number));
+    let (wall, tile) = wanted(text, group, system);
     let pool = prefer(pool, |plan| wall.is_none_or(|side| plan.side == Some(side)));
     let pool = prefer(pool, |plan| tile.is_none_or(|number| plan.number == number));
     Some(pool[rng.index(pool.len())].clone())
@@ -783,39 +825,32 @@ fn prefer(pool: Vec<Plan>, pick: impl Fn(&Plan) -> bool) -> Vec<Plan> {
     }
 }
 
-/// The wall and the tile to aim for: the ones the blueprint filed for the group, or
+/// The wall and the tile to aim for: the ones the blueprint filed for the system, or
 /// the ones the game would have drawn in their place.
-fn wanted(text: &str, kind: &str, members: &[&Element]) -> (Option<Side>, Option<i32>) {
-    let mut wall = None;
-    let mut tile = None;
-    for system in members {
-        let inside = elements(&text[system.span.clone()], system.span.start).unwrap_or_default();
-        let slots: Vec<&Element> = inside
-            .iter()
-            .filter(|element| element.name == "slot")
-            .collect();
-        wall = wall.or_else(|| slots.iter().find_map(|slot| slot_side(text, slot)));
-        tile = tile.or_else(|| slots.iter().find_map(|slot| slot_number(text, slot)));
-    }
-    let default = DEFAULTS.iter().find(|(name, _, _)| *name == kind);
+fn wanted(text: &str, group: &str, system: &Element) -> (Option<Side>, Option<i32>) {
+    let inside = elements(&text[system.span.clone()], system.span.start).unwrap_or_default();
+    let slots: Vec<&Element> = inside.iter().filter(|element| element.name == "slot").collect();
+    let wall = slots.iter().find_map(|slot| slot_side(text, slot));
+    let tile = slots.iter().find_map(|slot| slot_number(text, slot));
+    let default = DEFAULTS.iter().find(|(name, _, _)| *name == group);
     (
         wall.or(default.and_then(|(_, side, _)| *side)),
         tile.or(default.and_then(|(_, _, number)| *number)),
     )
 }
 
-
 /// The best that is left when a system was handed a room of a shape no shipped ship
 /// draws it in: the wall rule alone, which at least keeps a console against a wall and
-/// out of the middle of the floor, a bay machine filed off the floor, and the art of
-/// the ship left where it was. Only a ship too big for its own rooms, or one whose
-/// layout was kept after every redraw failed, comes here.
+/// out of the middle of the floor, the machine of a thin bay filed off the floor, and
+/// the art of the ship left where it was. Only a ship too big for its own rooms, or one
+/// whose layout was kept after every redraw failed, comes here.
 fn least_worst(
     kind: &str,
+    group: &str,
     room: &Room,
     doors: &[Door],
     text: &str,
-    members: &[&Element],
+    system: &Element,
     stock: &Stock,
     warnings: &mut Vec<String>,
     rng: &mut Rng,
@@ -824,13 +859,18 @@ fn least_worst(
         "a {kind} stands in a {}x{} room, a shape no shipped ship draws it in",
         room.w, room.h
     ));
-    let img = members.iter().find_map(|system| image_of(text, system));
-    if !stock.stationed(kind) {
-        let number = match kind == BAY {
-            true => -2,
-            false => NO_SLOT,
+    let img = image_of(text, system);
+    if group == BAY {
+        // The medbay blocks no tile; the clone bay has to file one, since its machine
+        // is drawn on the tile it names and nowhere else.
+        let number = match kind {
+            "medbay" => -2,
+            _ => 0,
         };
         return Some(Plan { w: room.w, h: room.h, number, side: None, img });
+    }
+    if !stock.stationed(kind) {
+        return Some(Plan { w: room.w, h: room.h, number: NO_SLOT, side: None, img });
     }
     let mut spots = layout::stations(room, doors);
     if spots.is_empty() {

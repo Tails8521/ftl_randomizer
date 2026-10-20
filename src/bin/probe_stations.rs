@@ -607,10 +607,15 @@ fn audit(records: &[Record], shipped: &blueprints::Stock) {
     }
 }
 
-/// The bay is one room, so its medbay and its clone bay should number it one way.
+/// The bay is one room with one machine and then the other, so a 2x2 bay has both
+/// machines number one tile: 12 of the 13 shipped 2x2 bays that file a tile at all do
+/// so the same way for both.
 fn disagreements(records: &[Record]) {
     let mut of_ship: BTreeMap<&str, Vec<String>> = BTreeMap::new();
-    for record in records.iter().filter(|record| record.kind == "bay") {
+    let square = records
+        .iter()
+        .filter(|record| record.kind == "bay" && record.shape == (2, 2));
+    for record in square {
         if let Some(plan) = record.plan {
             of_ship.entry(record.ship.as_str()).or_default().push(format!(
                 "{} blocks {}{}",
@@ -620,7 +625,10 @@ fn disagreements(records: &[Record]) {
             ));
         }
     }
-    println!("\nbay rooms whose two machines number their tile differently");
+    // Only a 2x2 bay has a tile the two machines can share. A thin one files nothing
+    // on the medbay and one tile on the clone bay, which is the shipped rule and not a
+    // disagreement.
+    println!("\n2x2 bay rooms whose two machines number their tile differently");
     let mut found = 0;
     for (ship, filed) in of_ship {
         let numbers: BTreeSet<String> = filed.iter().map(|line| line.split(' ').nth(2).unwrap_or("").to_string()).collect();
