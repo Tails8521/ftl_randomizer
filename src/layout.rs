@@ -23,8 +23,8 @@ pub type Tile = (i32, i32);
 pub const TILE: i32 = 35;
 
 /// The room count range a ship can get.
-const MIN_ROOMS: i64 = 15;
-const MAX_ROOMS: i64 = 25;
+pub const MIN_ROOMS: usize = 15;
+pub const MAX_ROOMS: usize = 25;
 /// Growth gives up after this many tries in a row that find no room, which is
 /// how a full hull ends a pass.
 const FULL_HULL_TRIES: u32 = 1500;
@@ -97,9 +97,11 @@ pub struct Layout {
 }
 
 /// A random layout for one hull. `mask` is the tiles a room may cover, from
-/// [`hull_mask`].
-pub fn generate(mask: &BTreeSet<Tile>, rng: &mut Rng) -> Layout {
-    let target = room_target(mask.len(), rng);
+/// [`hull_mask`]. `min_rooms` is the room count the ship has to reach, which is
+/// how many systems it has to house; a hull too small for it gets the most rooms
+/// it can hold.
+pub fn generate(mask: &BTreeSet<Tile>, rng: &mut Rng, min_rooms: usize) -> Layout {
+    let target = room_target(mask.len(), rng, min_rooms);
     let rooms = grow(mask, rng, target);
     let mut doors = wall_doors(&rooms, rng);
     link_rooms(&rooms, &mut doors, rng);
@@ -107,9 +109,11 @@ pub fn generate(mask: &BTreeSet<Tile>, rng: &mut Rng) -> Layout {
     Layout { rooms, doors }
 }
 
-/// Tiles a room may cover in a base image: every `TILE * TILE` pixel of the tile
-/// has alpha 255. Strict on purpose, it keeps rooms clear of the deck art and of
-/// the crystal spikes, and it costs only a few tiles.
+/// Tiles a room may cover in a base image: the tile has three quarters of its
+/// pixels opaque or better. The game paints its own floor under a room, so a tile
+/// only has to look like deck, and the vanilla layouts do use tiles that are not
+/// fully covered - measured over the 28 player hulls, this share leaves every tile
+/// the shipped rooms stand on.
 ///
 /// `origin` is the pixel of tile `(0, 0)` inside the image, which is
 /// `x = -img_x + HORIZONTAL`, `y = -img_y + VERTICAL`: the corner of the art from
@@ -119,7 +123,7 @@ pub fn hull_mask(base: &RgbaImage, origin: (i32, i32)) -> BTreeSet<Tile> {
     let mut mask = BTreeSet::new();
     for ty in -2..=(height as i32 / TILE + 2) {
         for tx in -2..=(width as i32 / TILE + 2) {
-            if opaque(base, origin, tx, ty) {
+            if deck(base, origin, tx, ty) {
                 mask.insert((tx, ty));
             }
         }
@@ -127,15 +131,17 @@ pub fn hull_mask(base: &RgbaImage, origin: (i32, i32)) -> BTreeSet<Tile> {
     mask
 }
 
-fn opaque(base: &RgbaImage, origin: (i32, i32), tx: i32, ty: i32) -> bool {
+fn deck(base: &RgbaImage, origin: (i32, i32), tx: i32, ty: i32) -> bool {
     let (width, height) = base.dimensions();
     let (x0, y0) = (origin.0 + tx * TILE, origin.1 + ty * TILE);
     if x0 < 0 || y0 < 0 || x0 + TILE > width as i32 || y0 + TILE > height as i32 {
         return false;
     }
-    (y0..y0 + TILE)
+    let solid = (y0..y0 + TILE)
         .flat_map(|y| (x0..x0 + TILE).map(move |x| (x, y)))
-        .all(|(x, y)| base.get_pixel(x as u32, y as u32)[3] == 255)
+        .filter(|(x, y)| base.get_pixel(*x as u32, *y as u32)[3] == 255)
+        .count();
+    solid * 4 >= (TILE * TILE) as usize * 3
 }
 
 // ------------------------------------------------------------------- rooms --
@@ -148,9 +154,12 @@ impl Room {
 }
 
 /// How many rooms a hull of this size should get: a little under one room per
-/// three tiles, plus or minus two, kept inside [`MIN_ROOMS`] to [`MAX_ROOMS`].
-fn room_target(hull_tiles: usize, rng: &mut Rng) -> usize {
-    (hull_tiles as i64 * 3 / 10 + rng.below(5) as i64 - 2).clamp(MIN_ROOMS, MAX_ROOMS) as usize
+/// three tiles, plus or minus two, kept inside [`MIN_ROOMS`] to [`MAX_ROOMS`] and
+/// never under what the ship's systems need.
+fn room_target(hull_tiles: usize, rng: &mut Rng, min_rooms: usize) -> usize {
+    let floor = min_rooms.clamp(MIN_ROOMS, MAX_ROOMS) as i64;
+    let asked = hull_tiles as i64 * 3 / 10 + rng.below(5) as i64 - 2;
+    asked.clamp(floor, MAX_ROOMS as i64) as usize
 }
 
 /// Grow a layout, repeat the growth pass until it reaches the target room count.
@@ -344,16 +353,27 @@ const SIDES: [Side; 4] = [Side::Up, Side::Down, Side::Left, Side::Right];
 
 /// The door record of the wall between two touching tiles, with the room id of
 /// each side. Position and ids come from the two tiles, so they cannot disagree
-/// with the geometry: `left_top` is the room that owns the left or top tile.
+/// with the geometry: `left_top` is the room that owns the left or top tile, and
+/// the record sits on the tile that is lower or to the right.
+///
+/// An airlock is the one place the two ids are not the two sides: every airlock
+/// record the game ships names its room first and `-1` second, whichever side the
+/// room is on, so that is what is written here too.
 fn door_record(one: Tile, id_one: i32, two: Tile, id_two: i32) -> Door {
+    let (airlock, low, high) = if id_one == -1 || id_two == -1 {
+        let room = if id_one == -1 { id_two } else { id_one };
+        (true, room, -1)
+    } else {
+        (false, id_two, id_one)
+    };
     if one.0 == two.0 {
         // One tile above the other, so the door lies across them.
         let above_first = one.1 < two.1;
         Door {
             x: one.0,
             y: if above_first { two.1 } else { one.1 },
-            left_top: if above_first { id_one } else { id_two },
-            right_bottom: if above_first { id_two } else { id_one },
+            left_top: if airlock { low } else if above_first { id_one } else { id_two },
+            right_bottom: if airlock { high } else if above_first { id_two } else { id_one },
             vertical: false,
         }
     } else {
@@ -361,8 +381,8 @@ fn door_record(one: Tile, id_one: i32, two: Tile, id_two: i32) -> Door {
         Door {
             x: if left_first { two.0 } else { one.0 },
             y: one.1,
-            left_top: if left_first { id_one } else { id_two },
-            right_bottom: if left_first { id_two } else { id_one },
+            left_top: if airlock { low } else if left_first { id_one } else { id_two },
+            right_bottom: if airlock { high } else if left_first { id_two } else { id_one },
             vertical: true,
         }
     }

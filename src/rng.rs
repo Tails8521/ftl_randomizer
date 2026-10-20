@@ -47,4 +47,13 @@ impl Rng {
         }
         index
     }
+
+    /// Shuffle a list in place. Drawing from the end keeps the draws of a run in
+    /// one order whatever the list length, which is what makes a seed replay.
+    pub fn shuffle<T>(&mut self, items: &mut [T]) {
+        for keep in (1..items.len()).rev() {
+            let swap = self.index(keep + 1);
+            items.swap(keep, swap);
+        }
+    }
 }

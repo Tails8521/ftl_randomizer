@@ -1,17 +1,59 @@
-//! Loads `data/ftl.dat`, extracts it, and writes it back out again.
+//! Give every player ship a new room layout.
 //!
-//! This binary owns all filesystem access. `FtlArchive` only ever sees bytes.
+//! All filesystem access lives here. The library only ever sees bytes: the archive
+//! is read into a buffer, edited in memory, and written back out as a `.dat` for a
+//! plain game install and a `.ftl` for a mod manager.
+//!
+//! The seed is printed first, and the same seed draws the same ships.
 
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use ftl_randomizer::FtlArchive;
+use ftl_randomizer::ftl_mod::FtlMod;
+use ftl_randomizer::rng::Rng;
+use ftl_randomizer::{rooms, FtlArchive};
 
-const INPUT: &str = "data/ftl.dat";
-const EXTRACT_TO: &str = "extracted";
-const OUTPUT: &str = "target/ftl.repack.dat";
+const NAME: &str = "Random Rooms";
+const VERSION: &str = "0.1";
+const AUTHOR: &str = "ftl_randomizer";
+const DESCRIPTION: &str = "Every player ship gets a new room layout, and every system \
+                           a room of its own. Built from one seed: the same seed \
+                           builds the same ships.";
+
+const USAGE: &str = "\
+randomize the room layout of the 28 player ships of an ftl.dat
+
+USAGE:
+  ftl_randomizer [SEED] [OPTIONS]
+
+  SEED   a number. The same seed draws the same ships. Without one the clock
+         supplies it, and prints it, so the run can be drawn again.
+
+OPTIONS:
+  --in PATH      archive to read                 (default data/ftl.dat)
+  --dat PATH     write the patched archive here   (default out/ftl.dat)
+  --ftl PATH     write the mod for a mod manager  (default out/random_rooms.ftl)
+  --no-dat       do not write the archive
+  --no-ftl       do not write the mod
+  --extract DIR  also unpack every file of the result under DIR
+  --systems      print the room each system was moved into
+  --help         this text
+
+The .dat is a whole game archive: drop it over the one the game reads. The .ftl
+holds only the files that changed, which is what a mod manager wants.";
+
+/// What the command line asked for.
+struct Args {
+    seed: u64,
+    input: PathBuf,
+    dat: Option<PathBuf>,
+    ftl: Option<PathBuf>,
+    extract: Option<PathBuf>,
+    systems: bool,
+}
 
 fn main() -> ExitCode {
     match run() {
@@ -23,41 +65,148 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> io::Result<()> {
-    let bytes = fs::read(INPUT)?;
-    println!("read {} bytes from {INPUT}", bytes.len());
+fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let args = parse_args()?;
 
-    let archive = FtlArchive::from_bytes(&bytes).map_err(io::Error::other)?;
+    let bytes = fs::read(&args.input)
+        .map_err(|error| format!("cannot read {}: {error}", args.input.display()))?;
+    let mut archive = FtlArchive::from_bytes(&bytes)?;
     println!(
-        "{} files, {} trailing byte(s) after the last payload",
+        "read {} files from {} ({})",
         archive.len(),
-        archive.trailing_bytes()
+        args.input.display(),
+        size(bytes.len())
     );
 
-    extract_all(&archive, Path::new(EXTRACT_TO))?;
-    println!("extracted every file to {EXTRACT_TO}");
+    let mut rng = Rng::new(args.seed);
+    let report = rooms::randomize(&mut archive, &mut rng)?;
 
-    let repacked = archive.to_bytes().map_err(io::Error::other)?;
+    println!("seed {}", args.seed);
     println!(
-        "repacked: {} bytes, byte for byte equal to the input: {}",
-        repacked.len(),
-        repacked == bytes
+        "{:<22}{:>6}{:>7}{:>7}{:>9}  blueprints",
+        "layout", "hull", "rooms", "doors", "airlocks"
     );
-    write(Path::new(OUTPUT), &repacked)?;
-    println!("wrote the repacked archive to {OUTPUT}");
-    Ok(())
-}
+    for ship in &report.ships {
+        println!(
+            "{:<22}{:>6}{:>7}{:>7}{:>9}  {}",
+            ship.layout,
+            ship.hull,
+            ship.rooms,
+            ship.doors,
+            ship.airlocks,
+            ship.blueprints.join(", ")
+        );
+    }
 
-/// Write every file of the archive under `dest`, making directories as needed.
-fn extract_all(archive: &FtlArchive<'_>, dest: &Path) -> io::Result<()> {
-    for (path, bytes) in archive.files() {
-        let target = dest.join(path);
-        write(&target, bytes)?;
+    if args.systems {
+        for change in &report.moves {
+            println!("\n{} on the {}", change.blueprint, change.layout);
+            for (system, room) in &change.systems {
+                println!("  {system:<12} room {room}");
+            }
+        }
+    }
+    for warning in &report.warnings {
+        println!("warning: {warning}");
+    }
+
+    if let Some(path) = &args.dat {
+        let packed = archive.to_bytes()?;
+        write(path, &packed)?;
+        println!(
+            "\nwrote the patched archive to {} ({}): put it over the game's ftl.dat",
+            path.display(),
+            size(packed.len())
+        );
+    }
+    if let Some(path) = &args.ftl {
+        let mut module = FtlMod::new();
+        for changed in &report.changed {
+            let payload = archive
+                .get_file(changed)
+                .ok_or_else(|| io::Error::other(format!("the archive lost {changed}")))?;
+            module.add(changed, payload);
+        }
+        module.describe(NAME, VERSION, AUTHOR, DESCRIPTION);
+        let packed = module.to_bytes();
+        write(path, &packed)?;
+        println!(
+            "wrote the mod to {} ({}): {} changed files, install it with a mod manager",
+            path.display(),
+            size(packed.len()),
+            module.len()
+        );
+    }
+
+    if let Some(dir) = &args.extract {
+        for (path, payload) in archive.files() {
+            write(&dir.join(path), payload)?;
+        }
+        println!(
+            "unpacked the result under {}, {} files changed",
+            dir.display(),
+            report.changed.len()
+        );
     }
     Ok(())
 }
 
-/// Write one file, creating its parent directories.
+/// Read the command line.
+fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let mut seed: Option<u64> = None;
+    let mut input = PathBuf::from("data/ftl.dat");
+    let mut dat = Some(PathBuf::from("out/ftl.dat"));
+    let mut ftl = Some(PathBuf::from("out/random_rooms.ftl"));
+    let mut extract = None;
+    let mut systems = false;
+
+    let mut at = 0;
+    while at < argv.len() {
+        match argv[at].as_str() {
+            "--help" | "-h" => {
+                println!("{USAGE}");
+                std::process::exit(0);
+            }
+            "--in" => input = take_path(&argv, &mut at, "--in")?,
+            "--dat" => dat = Some(take_path(&argv, &mut at, "--dat")?),
+            "--ftl" => ftl = Some(take_path(&argv, &mut at, "--ftl")?),
+            "--extract" => extract = Some(take_path(&argv, &mut at, "--extract")?),
+            "--no-dat" => dat = None,
+            "--no-ftl" => ftl = None,
+            "--systems" => systems = true,
+            other => {
+                seed = Some(other.parse().map_err(|_| {
+                    format!("{other:?} is neither a seed nor a flag, see --help")
+                })?)
+            }
+        }
+        at += 1;
+    }
+
+    let seed = match seed {
+        Some(seed) => seed,
+        None => SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos() as u64,
+    };
+    Ok(Args {
+        seed,
+        input,
+        dat,
+        ftl,
+        extract,
+        systems,
+    })
+}
+
+/// The path a flag was given, which is the word after it.
+fn take_path(argv: &[String], at: &mut usize, flag: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    *at += 1;
+    argv.get(*at)
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("{flag} needs a path").into())
+}
+
+/// Write one file, making the directories above it.
 fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -65,4 +214,19 @@ fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut file = fs::File::create(path)?;
     file.write_all(bytes)?;
     file.flush()
+}
+
+/// A byte count a person can read.
+fn size(bytes: usize) -> String {
+    const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    match unit {
+        0 => format!("{bytes} {}", UNITS[0]),
+        _ => format!("{value:.1} {}", UNITS[unit]),
+    }
 }
