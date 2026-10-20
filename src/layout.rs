@@ -153,7 +153,8 @@ fn opaque(base: &RgbaImage, origin: (i32, i32), tx: i32, ty: i32) -> bool {
 // ------------------------------------------------------------------- rooms --
 
 impl Room {
-    /// The tiles the room covers.
+    /// The tiles the room covers, row by row from the top left, which is the
+    /// order the blueprint numbers the slots of a room in.
     pub fn tiles(&self) -> impl Iterator<Item = Tile> {
         (self.y..self.y + self.h).flat_map(move |y| (self.x..self.x + self.w).map(move |x| (x, y)))
     }
@@ -485,8 +486,9 @@ impl Room {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Side {
+/// One side of a room.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Side {
     Up,
     Down,
     Left,
@@ -494,6 +496,43 @@ enum Side {
 }
 
 const SIDES: [Side; 4] = [Side::Up, Side::Down, Side::Left, Side::Right];
+
+impl Side {
+    /// The name the blueprint files give to a station that faces this way.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Side::Up => "up",
+            Side::Down => "down",
+            Side::Left => "left",
+            Side::Right => "right",
+        }
+    }
+
+    /// The side a blueprint names, `None` for a word it does not use.
+    pub fn parse(name: &str) -> Option<Side> {
+        SIDES.into_iter().find(|side| side.name() == name)
+    }
+
+    /// The step from a tile to the tile on the other side of this wall.
+    fn step(&self) -> Tile {
+        match self {
+            Side::Up => (0, -1),
+            Side::Down => (0, 1),
+            Side::Left => (-1, 0),
+            Side::Right => (1, 0),
+        }
+    }
+
+    /// true when the tile sits on this side of the room, so it touches the wall.
+    fn holds(&self, room: &Room, tile: Tile) -> bool {
+        match self {
+            Side::Up => tile.1 == room.y,
+            Side::Down => tile.1 == room.y + room.h - 1,
+            Side::Left => tile.0 == room.x,
+            Side::Right => tile.0 == room.x + room.w - 1,
+        }
+    }
+}
 
 /// The door record of the wall between two touching tiles, with the room id of
 /// each side. Position and ids come from the two tiles, so they cannot disagree
@@ -545,6 +584,12 @@ impl Door {
         } else {
             ((self.x, self.y - 1), (self.x, self.y))
         }
+    }
+
+    /// true when the door sits on the wall two touching tiles share.
+    pub fn separates(&self, one: Tile, two: Tile) -> bool {
+        let (a, b) = self.tiles();
+        (a == one && b == two) || (a == two && b == one)
     }
 }
 
@@ -604,17 +649,11 @@ fn link_rooms(rooms: &[Room], doors: &mut Vec<Door>, rng: &mut Rng) {
         let free: Vec<Pair> = wall
             .iter()
             .copied()
-            .filter(|spot| !doors.iter().any(|door| separates(door, *spot)))
+            .filter(|(one, two)| !doors.iter().any(|door| door.separates(*one, *two)))
             .collect();
         let spot = free[rng.index(free.len())];
         doors.push(door_record(spot.0, pair.0 as i32, spot.1, pair.1 as i32));
     }
-}
-
-/// true when the door sits exactly on this pair of tiles.
-fn separates(door: &Door, spot: Pair) -> bool {
-    let (one, two) = door.tiles();
-    (one == spot.0 && two == spot.1) || (one == spot.1 && two == spot.0)
 }
 
 /// Which group each room belongs to when you only walk through built doors.
@@ -705,4 +744,53 @@ fn spots(count: usize, total: usize, rng: &mut Rng) -> Vec<usize> {
         chosen.push(pool.swap_remove(rng.index(pool.len())));
     }
     chosen
+}
+
+// ------------------------------------------------------------------ stations --
+
+/// Where a station may stand: one tile of a room, and the wall of it the crew
+/// face.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Station {
+    /// The tile as the blueprint numbers them.
+    pub number: i32,
+    pub side: Side,
+}
+
+/// The stations the shape of a room allows, whatever stands outside it.
+///
+/// A station is drawn on the wall the crew face, so it has to face a wall of its
+/// own room and never the room itself: only a tile of the top row may face up,
+/// only a tile of the left column may face left, and so on. A tile of a corner
+/// allows both its walls, which is what the four corners of a 2x2 room give eight
+/// stations, and a tile of a 1x2 room, being the corner twice over, three.
+pub fn station_tiles(room: &Room) -> Vec<Station> {
+    room_stations(room, None)
+}
+
+/// The stations a room allows with its doors: [`station_tiles`] without the ones
+/// that face a door, airlock included. A crew member stood in a doorway is in
+/// everyone's way, and the console hides the door.
+pub fn stations(room: &Room, doors: &[Door]) -> Vec<Station> {
+    room_stations(room, Some(doors))
+}
+
+fn room_stations(room: &Room, doors: Option<&[Door]>) -> Vec<Station> {
+    let mut spots = Vec::new();
+    for (number, tile) in room.tiles().enumerate() {
+        for side in SIDES {
+            if !side.holds(room, tile) {
+                continue;
+            }
+            if let Some(doors) = doors {
+                let step = side.step();
+                let other = (tile.0 + step.0, tile.1 + step.1);
+                if doors.iter().any(|door| door.separates(tile, other)) {
+                    continue;
+                }
+            }
+            spots.push(Station { number: number as i32, side });
+        }
+    }
+    spots
 }

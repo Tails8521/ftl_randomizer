@@ -23,7 +23,7 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
 use crate::blueprints::{self, Blueprint};
-use crate::layout::{self, Room};
+use crate::layout::{self, Layout, Room};
 use crate::rng::Rng;
 use crate::ship_txt::ShipTxt;
 use crate::FtlArchive;
@@ -31,6 +31,12 @@ use crate::FtlArchive;
 /// Rooms left over for corridors, cargo and boarding parties, on top of the one
 /// every system needs.
 const SPARE_ROOMS: usize = 3;
+
+/// How often one ship layout is drawn before the last of them is kept. A piloting
+/// station only stands in a thin room, and the shapes a growth pass carves are a
+/// matter of chance, so a layout that cannot house the ship is drawn again rather
+/// than forcing a system into a room of a shape it was not drawn in.
+const LAYOUT_TRIES: usize = 40;
 
 /// What went wrong with an archive.
 #[derive(Debug)]
@@ -115,6 +121,10 @@ pub fn randomize(archive: &mut FtlArchive, rng: &mut Rng) -> Result<Report> {
     // The layouts to draw. A layout belongs to a player ship when the game holds a
     // base image for it, which enemy ships do not have.
     let mut wanted: BTreeMap<String, LayoutRequest> = BTreeMap::new();
+    let mut drivers: BTreeMap<String, Vec<Driver>> = BTreeMap::new();
+    // The room art the game ships, read before any blueprint is moved: the room a
+    // system sits in says what shape its art was cut for.
+    let mut art = blueprints::RoomArt::default();
     for (path, text) in &texts {
         for blueprint in lists[path].iter() {
             if archive.get_file(&base_image(&blueprint.layout)).is_none() {
@@ -128,26 +138,47 @@ pub fn randomize(archive: &mut FtlArchive, rng: &mut Rng) -> Result<Report> {
                 .or_insert_with(|| LayoutRequest { rooms: 0, blueprints: Vec::new() });
             entry.rooms = entry.rooms.max(need);
             entry.blueprints.push(blueprint.name.clone());
+            drivers
+                .entry(blueprint.layout.clone())
+                .or_default()
+                .push(Driver { path: path.clone(), blueprint: blueprint.clone() });
+            blueprints::gather(text, blueprint, &vanilla(archive, &blueprint.layout), &mut art)
+                .map_err(|why| Error::Unreadable { path: path.clone(), why })?;
         }
     }
 
     // One layout per ship, and the rooms its systems will be handed out of.
-    let mut rooms_of: BTreeMap<String, Vec<Room>> = BTreeMap::new();
+    let mut rooms_of: BTreeMap<String, Layout> = BTreeMap::new();
     let mut ships: Vec<Ship> = Vec::new();
     let mut changed: Vec<String> = Vec::new();
     for (layout, request) in &wanted {
         let txt_path = layout_txt(layout);
-        let ship = redraw(archive, rng, layout, request, &txt_path)?;
-        warnings.extend(ship.note.clone());
-        rooms_of.insert(layout.clone(), ship.rooms.clone());
+        let mut drawn = redraw(archive, rng, layout, request, &txt_path)?;
+        // Drawn again while it cannot house the ships that drive it: rooms of the
+        // wrong shape are no use to a piloting station, and no amount of squeezing
+        // makes a thin room out of a square one.
+        let mut tries = 1;
+        while tries < LAYOUT_TRIES && !houses(&drivers[layout], &texts, &drawn.layout) {
+            drawn = redraw(archive, rng, layout, request, &txt_path)?;
+            tries += 1;
+        }
+        if !houses(&drivers[layout], &texts, &drawn.layout) {
+            warnings.push(format!(
+                "{} was drawn {tries} times without rooms for every system of {}",
+                layout,
+                request.blueprints.join(", ")
+            ));
+        }
+        warnings.extend(drawn.note);
+        rooms_of.insert(layout.clone(), drawn.layout);
         changed.push(txt_path);
-        ships.push(ship.ship);
+        ships.push(drawn.ship);
     }
 
     // Then the systems, into those rooms.
     let mut moves = Vec::new();
     for (path, text) in &texts {
-        let edit = blueprints::randomize(text, &rooms_of, rng)
+        let edit = blueprints::randomize(text, &rooms_of, &art, rng)
             .map_err(|why| Error::Unreadable { path: path.clone(), why })?;
         let Some(edit) = edit else { continue };
         for change in &edit.changes {
@@ -178,16 +209,44 @@ pub fn randomize(archive: &mut FtlArchive, rng: &mut Rng) -> Result<Report> {
     })
 }
 
+/// The shape of every room of a layout as the game ships it, in the order the file
+/// draws them, which is how the blueprints number them.
+fn vanilla(archive: &FtlArchive, layout: &str) -> Vec<(i32, i32)> {
+    let Some(bytes) = archive.get_file(&layout_txt(layout)) else {
+        return Vec::new();
+    };
+    let Ok(txt) = ShipTxt::parse(bytes.to_vec()) else {
+        return Vec::new();
+    };
+    txt.rooms.iter().map(|room| (room.w, room.h)).collect()
+}
+
 /// A layout, and why it has to be at least this big.
 struct LayoutRequest {
     rooms: usize,
     blueprints: Vec<String>,
 }
 
+/// One blueprint that drives a layout, with the file it came from, which is what
+/// says whether that layout can house it.
+struct Driver {
+    path: String,
+    blueprint: Blueprint,
+}
+
+/// true when the rooms house every blueprint that drives a layout.
+fn houses(drivers: &[Driver], texts: &BTreeMap<String, String>, layout: &Layout) -> bool {
+    drivers
+        .iter()
+        .all(|driver| blueprints::houses(&texts[&driver.path], &driver.blueprint, layout))
+}
+
 /// What `redraw` made of a ship.
 struct Drawn {
     ship: Ship,
-    rooms: Vec<Room>,
+    /// The rooms and doors that were written, which is what decides where a
+    /// station may stand.
+    layout: Layout,
     /// Set when the hull art does not reach the box the layout shipped in.
     note: Option<String>,
 }
@@ -272,23 +331,22 @@ fn redraw(
         _ => None,
     };
     let drawn = layout::generate(&mask, rng, request.rooms, anchor);
-    let rooms = drawn.rooms.clone();
     let doors = drawn.doors.iter().filter(|door| !door.airlock()).count();
     let airlocks = drawn.doors.len() - doors;
 
-    txt.set_layout(drawn.rooms, drawn.doors);
+    txt.set_layout(drawn.rooms.clone(), drawn.doors.clone());
     archive.set_file(txt_path, txt.to_bytes());
 
     Ok(Drawn {
         ship: Ship {
             layout: layout.to_string(),
             hull: mask.len(),
-            rooms: rooms.len(),
+            rooms: drawn.rooms.len(),
             doors,
             airlocks,
             blueprints: request.blueprints.clone(),
         },
-        rooms,
+        layout: drawn,
         note,
     })
 }
