@@ -4,7 +4,9 @@
 //! its systems in a `<systemList>`, each one naming the room it sits in
 //! (`room="4"`). Give a layout a new shape and those numbers have to follow it,
 //! which is all this module does: read a blueprints file, move every system into a
-//! room of its own, write the file back.
+//! room of its own, write the file back. It also points the `<floorImage>` of the
+//! eight C hulls at the deck drawn for their own layout, since they are shipped to
+//! borrow the floor of the A ship.
 //!
 //! Nothing is re-serialized. Every change is a byte range of the input, so the
 //! comments, the spacing and the order of the blueprints come back exactly as they
@@ -435,6 +437,7 @@ pub fn randomize(
             warnings: Vec::new(),
         };
         assign(text, &blueprint, layout, stock, rng, &mut patches, &mut change)?;
+        own_floor(text, &blueprint, &mut patches);
         changes.push(change);
     }
 
@@ -445,6 +448,39 @@ pub fn randomize(
         bytes: rewrite(text, &patches),
         changes,
     }))
+}
+
+/// Point the deck of a ship at the art drawn for its own layout.
+///
+/// The eight `*_3` hulls file `<floorImage>kestral</floorImage>` and the like,
+/// which is how the game is told to draw the floor of the A ship under a hull of
+/// another shape. Those hulls ship no deck art of their own, and the floor they
+/// borrow is cut for the rooms of the A layout, so it does not fit them. Every
+/// layout is drawn a deck of its own now, so the name written here is the layout
+/// of the blueprint - which is the name the game takes when a blueprint files no
+/// `<floorImage>` at all, since the A and B hulls file none and are drawn from
+/// `<layout>_floor.png`.
+///
+/// Only a blueprint that files the element is written. `<shieldImage>` and
+/// `<cloakImage>` are left where they are: the shield ring and the cloak of a C
+/// hull are the A ship's art and are not drawn from the rooms.
+fn own_floor(text: &str, blueprint: &Blueprint, patches: &mut Vec<Patch>) {
+    let Ok(inside) = elements(&text[blueprint.span.clone()], blueprint.span.start) else {
+        return;
+    };
+    let Some(image) = inside.into_iter().find(|element| element.name == "floorImage") else {
+        return;
+    };
+    // The name the game reads is the text between the two tags of the element.
+    let close = match text[image.span.clone()].rfind("</") {
+        Some(at) => image.span.start + at,
+        None => return,
+    };
+    let value = image.tag.end..close;
+    if &text[value.clone()] == blueprint.layout {
+        return;
+    }
+    patches.push((value, blueprint.layout.clone()));
 }
 
 /// The systems of one blueprint, handed the rooms they got.

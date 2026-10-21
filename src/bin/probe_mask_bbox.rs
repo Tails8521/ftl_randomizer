@@ -41,7 +41,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let Some(txt_bytes) = archive.get_file(&txt_path) else {
             continue;
         };
-        let txt = ShipTxt::parse(txt_bytes.to_vec()).map_err(|_| txt_path.clone())?;
+        // Parsed for its shape alone: an unreadable layout is worth a line of its own.
+        ShipTxt::parse(txt_bytes.to_vec()).map_err(|_| txt_path.clone())?;
         let xml = archive
             .get_file(&format!("data/{layout_name}.xml"))
             .ok_or(txt_path.clone())?
@@ -55,11 +56,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .decode()?
             .to_rgba8();
 
+        // HORIZONTAL and VERTICAL slide the ship on screen, not the art against
+        // the room grid, so they play no part in where a tile stands.
         let (img_x, img_y) = offset(&xml)?;
-        let origin = (
-            -img_x + txt.number("HORIZONTAL").unwrap_or(0),
-            -img_y + txt.number("VERTICAL").unwrap_or(0),
-        );
+        let origin = (-img_x, -img_y);
         let mask = layout::hull_mask(&art, origin);
 
         let rooms = rooms_of(std::str::from_utf8(txt_bytes)?);

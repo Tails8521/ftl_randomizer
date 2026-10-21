@@ -74,8 +74,6 @@ fn draw(txt: &str, png: &str) -> Result<RgbaImage, Box<dyn std::error::Error>> {
     let tokens: Vec<&str> = text.split_whitespace().collect();
     let mut rooms = Vec::new();
     let mut doors = Vec::new();
-    let mut horizontal = 0;
-    let mut vertical = 0;
     let mut at = 0;
     while at < tokens.len() {
         let Some((_, taken)) = ARITY.iter().find(|(key, _)| *key == tokens[at]) else {
@@ -88,16 +86,16 @@ fn draw(txt: &str, png: &str) -> Result<RgbaImage, Box<dyn std::error::Error>> {
         match tokens[at] {
             "ROOM" => rooms.push(value),
             "DOOR" => doors.push(value),
-            "HORIZONTAL" => horizontal = value[0],
-            "VERTICAL" => vertical = value[0],
             _ => {}
         }
         at += 1 + taken;
     }
 
     let art = image::open(png)?.to_rgba8();
+    // HORIZONTAL and VERTICAL slide the ship on screen, not the art against the
+    // room grid, so they are not read here.
     let (img_x, img_y) = offset(png)?;
-    let origin = (-img_x + horizontal, -img_y + vertical);
+    let origin = (-img_x, -img_y);
     let mut out = art.clone();
     for (index, room) in rooms.iter().enumerate() {
         let (x, y, w, h) = (room[1], room[2], room[3], room[4]);

@@ -23,6 +23,7 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
 use crate::blueprints::{self, Blueprint};
+use crate::floor::{self, Deck};
 use crate::layout::{self, Layout, Room};
 use crate::rng::Rng;
 use crate::ship_txt::ShipTxt;
@@ -79,6 +80,10 @@ pub struct Ship {
     pub rooms: usize,
     pub doors: usize,
     pub airlocks: usize,
+    /// Pixels of deck art that were drawn for it.
+    pub deck: u64,
+    /// false when the ship ships no deck art of its own, so the file is new.
+    pub shipped: bool,
     /// The blueprints that drive this layout, and had their systems moved.
     pub blueprints: Vec<String>,
 }
@@ -174,6 +179,51 @@ pub fn randomize(archive: &mut FtlArchive, rng: &mut Rng) -> Result<Report> {
         rooms_of.insert(layout.clone(), drawn.layout);
         changed.push(txt_path);
         ships.push(drawn.ship);
+    }
+
+    // Then the deck art under those rooms. Read here, once the rooms are settled
+    // and before any of it is rewritten, because the canvas and the colour come
+    // off the art the game ships.
+    for ship in &mut ships {
+        let path = floor_image(&ship.layout);
+        let xml = archive
+            .get_file(&layout_xml(&ship.layout))
+            .ok_or_else(|| Error::Missing {
+                path: layout_xml(&ship.layout),
+            })?;
+        let at = deck_offset(xml).map_err(|why| Error::Unreadable {
+            path: layout_xml(&ship.layout),
+            why,
+        })?;
+        let art = archive.get_file(&path).map(|bytes| bytes.to_vec());
+        let rooms = &rooms_of[&ship.layout];
+        let deck = match &art {
+            Some(bytes) => Deck::shipped(bytes, at).map_err(|why| Error::Unreadable {
+                path: path.clone(),
+                why,
+            })?,
+            None => Deck::hull(
+                hull_size(archive, &ship.layout)?,
+                at,
+            ),
+        };
+        let made = floor::draw(&rooms.rooms, &rooms.doors, &deck).map_err(|why| {
+            Error::Unreadable {
+                path: path.clone(),
+                why,
+            }
+        })?;
+        if made.clipped > 0 {
+            warnings.push(format!(
+                "{}: {} pixels of deck fell off its {}x{} canvas, so the rooms reach \
+                 past the box the layout shipped in",
+                ship.layout, made.clipped, deck.width, deck.height
+            ));
+        }
+        ship.deck = made.pixels;
+        ship.shipped = art.is_some();
+        archive.set_file(&path, made.png);
+        changed.push(path);
     }
 
     // Then the systems, into those rooms.
@@ -287,18 +337,20 @@ fn redraw(
             why: error.to_string(),
         })?
         .to_rgba8();
-    let (img_x, img_y) = img_offset(xml).map_err(|why| Error::Unreadable {
+    let (img, _) = art_offsets(xml).map_err(|why| Error::Unreadable {
         path: layout_xml(layout),
         why,
     })?;
 
-    // Tile (0, 0) is the corner of the hull art, slid by the pixel offsets the
-    // layout file asks for. Rooms are stored as tiles, so this is all the art and
-    // the grid have to agree on.
-    let origin = (
-        -img_x + txt.number("HORIZONTAL").unwrap_or(0),
-        -img_y + txt.number("VERTICAL").unwrap_or(0),
-    );
+    // Tile (0, 0) is the corner of the hull art the `<img>` of the layout file
+    // names. HORIZONTAL and VERTICAL are not part of it: they slide the ship on
+    // screen, art and rooms together, and never move the art against the grid.
+    // Measured over the 28 player layouts: with `<img>` alone every room of every
+    // one of them stands on fully painted art, and with the two offsets added the
+    // eight layouts that carry them spill 1% to 6% of their room pixels over the
+    // hull edge. Rooms are stored as tiles, so this is all the art and the grid
+    // have to agree on.
+    let origin = (-img.0, -img.1);
     let mask = layout::hull_mask(&art, origin);
     // Rooms stay inside the box the shipped layout used and start from its low
     // corner: the game hangs the hull art off the low corner of the room grid, so
@@ -350,6 +402,8 @@ fn redraw(
             rooms: drawn.rooms.len(),
             doors,
             airlocks,
+            deck: 0,
+            shipped: true,
             blueprints: request.blueprints.clone(),
         },
         layout: drawn,
@@ -357,13 +411,21 @@ fn redraw(
     })
 }
 
-/// Where the hull art of a ship sits: the `<img x= y=>` of its `<layout>.xml`.
-fn img_offset(xml: &[u8]) -> std::result::Result<(i32, i32), String> {
+/// Where the art of a ship sits, from its `<layout>.xml`: the `<img x= y=>` of
+/// the hull, and the `<floor x= y=>` of the deck art under the rooms.
+///
+/// Both are relative to the hull art, so their difference is where the deck sits
+/// in the room grid.
+fn art_offsets(xml: &[u8]) -> std::result::Result<((i32, i32), (i32, i32)), String> {
     let mut reader = Reader::from_reader(xml);
     let mut buffer = Vec::new();
+    let mut img = None;
+    let mut deck = None;
     loop {
         match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(tag)) | Ok(Event::Empty(tag)) if tag.local_name().as_ref() == b"img" => {
+            Ok(Event::Start(tag)) | Ok(Event::Empty(tag))
+                if matches!(tag.local_name().as_ref(), b"img" | b"floor") =>
+            {
                 let mut x = None;
                 let mut y = None;
                 for attribute in tag.attributes().flatten() {
@@ -374,16 +436,51 @@ fn img_offset(xml: &[u8]) -> std::result::Result<(i32, i32), String> {
                         _ => {}
                     }
                 }
-                return match (x, y) {
-                    (Some(x), Some(y)) => Ok((x, y)),
-                    _ => Err("<img> has no x and y".to_string()),
+                let pair = match (x, y) {
+                    (Some(x), Some(y)) => (x, y),
+                    _ => return Err(format!("<{}> has no x and y", String::from_utf8_lossy(tag.local_name().as_ref()))),
                 };
+                // The one layout file that holds a second, commented out pair is
+                // read as one, because the reader never hands back a comment.
+                if tag.local_name().as_ref() == b"img" {
+                    img = Some(pair);
+                } else {
+                    deck = Some(pair);
+                }
             }
-            Ok(Event::Eof) => return Err("no <img> in the layout file".to_string()),
+            Ok(Event::Eof) => break,
             Ok(_) => buffer.clear(),
             Err(error) => return Err(error.to_string()),
         }
     }
+    match (img, deck) {
+        (Some(img), Some(deck)) => Ok((img, deck)),
+        (None, _) => Err("no <img> in the layout file".to_string()),
+        (_, None) => Err("no <floor> in the layout file".to_string()),
+    }
+}
+
+/// The grid pixel the deck canvas stands on: what `<offsets><floor x y>` says,
+/// moved into the room grid, whose corner is the hull art corner `<img x y>`
+/// names. Grid pixels are 35 to a tile.
+pub fn deck_offset(xml: &[u8]) -> std::result::Result<(i32, i32), String> {
+    let ((img_x, img_y), (x, y)) = art_offsets(xml)?;
+    Ok((x - -img_x, y - -img_y))
+}
+
+/// The size of the hull art of a layout, which is the canvas a ship with no deck
+/// art of its own is drawn on.
+fn hull_size(archive: &FtlArchive, layout: &str) -> Result<(u32, u32)> {
+    let path = base_image(layout);
+    let bytes = archive
+        .get_file(&path)
+        .ok_or_else(|| Error::Missing { path: path.clone() })?;
+    let image = image::load_from_memory(bytes)
+        .map_err(|error| Error::Unreadable {
+            path,
+            why: error.to_string(),
+        })?;
+    Ok(image.into_rgba8().dimensions())
 }
 
 /// true when `hay` holds `needle`.
@@ -395,6 +492,11 @@ fn holds(hay: &[u8], needle: &[u8]) -> bool {
 /// makes it a player ship test.
 fn base_image(layout: &str) -> String {
     format!("img/ship/{layout}_base.png")
+}
+
+/// The deck art that shows through the rooms of a layout.
+fn floor_image(layout: &str) -> String {
+    format!("img/ship/{layout}_floor.png")
 }
 
 /// The rooms and doors of a layout.

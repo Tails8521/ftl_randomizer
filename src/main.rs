@@ -21,8 +21,9 @@ const NAME: &str = "Random Rooms";
 const VERSION: &str = "0.1";
 const AUTHOR: &str = "ftl_randomizer";
 const DESCRIPTION: &str = "Every player ship gets a new room layout, every system \
-                           a room of its own, and every ship a new colour. Built \
-                           from one seed: the same seed builds the same ships.";
+                           a room of its own, the deck under it redrawn to fit, \
+                           and every ship a new colour. Built from one seed: the \
+                           same seed builds the same ships.";
 
 const USAGE: &str = "\
 randomize the room layout of the 28 player ships of an ftl.dat
@@ -43,6 +44,11 @@ OPTIONS:
   --extract DIR  also unpack every file of the result under DIR
   --systems      print the room each system was moved into
   --help         this text
+
+Each ship is redrawn as it flies: the hull art is cut up and moved with the
+rooms, and the deck under them is drawn again to fit, in the grey and the black
+edge the ship's own deck was painted with. The eight C hulls borrow the floor of
+the A ship as the game ships them, and are pointed at the deck drawn for them.
 
 The .dat is a whole game archive: drop it over the one the game reads. The .ftl
 holds only the files that changed, which is what a mod manager wants.";
@@ -96,12 +102,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("seed {}", args.seed);
     println!(
-        "{:<22}{:>6}{:>7}{:>7}{:>9}{:>6}  blueprints",
-        "layout", "hull", "rooms", "doors", "airlocks", "hue"
+        "{:<22}{:>6}{:>7}{:>7}{:>9}{:>6}{:>9}  blueprints",
+        "layout", "hull", "rooms", "doors", "airlocks", "hue", "deck"
     );
     for ship in &report.ships {
         println!(
-            "{:<22}{:>6}{:>7}{:>7}{:>9}{:>6}  {}",
+            "{:<22}{:>6}{:>7}{:>7}{:>9}{:>6}{:>9}  {}",
             ship.layout,
             ship.hull,
             ship.rooms,
@@ -111,6 +117,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Some(angle) => format!("{angle}°"),
                 None => "-".to_string(),
             },
+            // A `+` marks a hull that ships no deck art of its own, so the file
+            // of this run is the first one the game has ever had for it.
+            format!("{}{}", ship.deck, if ship.shipped { "" } else { "+" }),
             ship.blueprints.join(", ")
         );
     }

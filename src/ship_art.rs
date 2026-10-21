@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::io::Cursor;
 
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use image::ImageReader;
+use image::{ImageReader, RgbaImage};
 
 use crate::rng::Rng;
 use crate::{Error, FtlArchive};
@@ -110,9 +110,13 @@ fn turn(bytes: &[u8], degrees: i32) -> Result<Vec<u8>, String> {
         pixel.0 = [red, green, blue, alpha];
     }
 
+    encode(&image)
+}
+
+/// The image as a PNG. The stock art is packed tight, and `image` compresses
+/// loosely by default, which would leave a mod twice the size it needs to be.
+pub fn encode(image: &RgbaImage) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    // The stock art is packed tight, and `image` compresses loosely by default,
-    // which would leave a mod twice the size it needs to be.
     let encoder = PngEncoder::new_with_quality(&mut out, CompressionType::Best, FilterType::Adaptive);
     image
         .write_with_encoder(encoder)

@@ -23,6 +23,7 @@
 //! what makes the format understood rather than merely tolerated.
 
 pub mod blueprints;
+pub mod floor;
 pub mod ftl_mod;
 pub mod layout;
 pub mod randomizer;
