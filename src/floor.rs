@@ -8,12 +8,14 @@
 //!
 //! What the deck looks like was measured over the 20 floors the game ships, and
 //! `src/bin/probe_floor.rs` scores the rule against every one of them: seven of
-//! the twenty are redrawn to within two hundredths of their pixels. Every room
-//! box grown by `PAD`, with each corner of a box cut by `CHAMFER`, and the strip
-//! behind every airlock door left unpainted, is the floor of all of them. It is
-//! painted in the two colours of the art the ship ships: a band `OUTLINE` pixels
-//! deep along the edge of the shape, and the deck colour within it. Zoltan B - the
-//! one layout that is regular all over - is off by 126 pixels of 58 490.
+//! the twenty are redrawn to within two hundredths of their pixels. Every room box
+//! grown by `PAD`, with each corner of a box cut by `CHAMFER`, and the strip behind
+//! every run of airlock doors left unpainted - `DOOR_IN` short of each end of the
+//! run, so a wall turns into the airlock instead of stopping before the corner - is
+//! the floor of all of them. It is painted in the two colours of the art the ship
+//! ships: a band `OUTLINE` pixels deep along the edge of the shape, and the deck
+//! colour within it. Zoltan B - the one layout that is regular all over - is off by
+//! 122 pixels of 58 490, and 228 pixels of its colour.
 //! The two ships farthest off are hand finished in ways no rule of rooms can
 //! tell: Rock A leaves three of the corridors between its rooms unpainted, and
 //! Mantis A leaves an octagonal hole in the deck of one of them, both of them
@@ -40,6 +42,15 @@ const PAD: i32 = 6;
 /// in, and the shipped decks leave that strip unpainted. Measured on Zoltan B,
 /// where it is four pixels on every one of its five airlocks.
 const AIRLOCK_IN: i32 = 4;
+
+/// How far the cut of an airlock falls short of the ends of the tiles it stands
+/// in. A door and its frame do not fill a whole tile, and the deck of the wall the
+/// airlock turns into is left standing: measured over the shipped floors, the clear
+/// span of a wall falls short of its tiles by five or six pixels at each end, and a
+/// wall with a door in each of its two tiles is cut in one span, inset only at the
+/// two ends of the run (`temp/lock.py`). Without this the cut eats the corner of the
+/// room and the wall stops short of the turn into the airlock.
+const DOOR_IN: i32 = 5;
 
 /// How much of each corner of a room box is cut away. Measured on Zoltan B: the
 /// top row of a box starts three pixels in, the next two rows one pixel less.
@@ -161,10 +172,7 @@ pub fn draw(rooms: &[Room], doors: &[Door], deck: &Deck) -> Result<Art, String> 
                 if cut(gx - box_.0, gy - box_.1, box_.2 - box_.0, box_.3 - box_.1) {
                     continue;
                 }
-                if holes
-                    .iter()
-                    .any(|hole| hole.0 <= gx && gx < hole.2 && hole.1 <= gy && gy < hole.3)
-                {
+                if holes.iter().any(|hole| in_hole(hole, gx, gy)) {
                     continue;
                 }
                 let (px, py) = (gx - deck.x, gy - deck.y);
@@ -230,24 +238,37 @@ fn cut(dx: i32, dy: i32, width: i32, height: i32) -> bool {
         || (width - 1 - dx) + (height - 1 - dy) < CHAMFER
 }
 
+/// true when an airlock strip cuts a pixel out of the deck. The four corners of a
+/// strip are exempt, chamfered like a room box, which is what turns the wall into
+/// the airlock at an angle instead of at a step.
+fn in_hole(hole: &(i32, i32, i32, i32), gx: i32, gy: i32) -> bool {
+    let (x0, y0, x1, y1) = *hole;
+    if !(x0 <= gx && gx < x1 && y0 <= gy && gy < y1) {
+        return false;
+    }
+    !cut(gx - x0, gy - y0, x1 - x0, y1 - y0)
+}
+
 /// The strips to leave unpainted behind the airlock doors of each room, as grid
-/// pixel rectangles, one per door.
+/// pixel rectangles, one per run of doors on a wall.
 ///
-/// A strip covers the tile the door stands in, from `PAD` outside the wall to
-/// `AIRLOCK_IN` inside it. It stops at the tile, because the rest of the wall
-/// keeps its deck: 16 of the walls of the shipped layouts hold an airlock on one
-/// tile and nothing on the other, and the deck over the plain tile is grown like
-/// any other. Zoltan B gives no hint of it, since each of its three airlock walls
-/// is airlocked over its whole length. Anaerobic B, Kestrel B, Fed B and Mantis B
-/// do have walls like that, and taking the strip per door rather than per wall
-/// lifts the first two of them from 0.9318 and 0.9359 to 0.9654 and 0.9562.
+/// A strip covers the tiles its doors stand in, from `PAD` outside the wall to
+/// `AIRLOCK_IN` inside it, and `DOOR_IN` short of each end of the run. It stops at
+/// the run, because the rest of the wall keeps its deck: 16 of the walls of the
+/// shipped layouts hold an airlock on one tile and nothing on the other, and the
+/// deck over the plain tile is grown like any other. Zoltan B gives no hint of it,
+/// since each of its three airlock walls is airlocked over its whole length.
+/// Anaerobic B, Kestrel B, Fed B and Mantis B do have walls like that, and taking
+/// the strip per run of doors rather than per wall lifts the first two of them from
+/// 0.9318 and 0.9359 to 0.9641 and 0.9581.
 ///
 /// An airlock names its room first and `-1` second whichever side of the door
 /// the room is on, so the wall comes from the two tiles the door divides: the
 /// room owns one of them, and the wall that tile touches is the one the door
 /// lies on.
 fn airlock_strips(rooms: &[Room], doors: &[Door]) -> BTreeMap<usize, Vec<(i32, i32, i32, i32)>> {
-    let mut out: BTreeMap<usize, Vec<(i32, i32, i32, i32)>> = BTreeMap::new();
+    // The doors of each wall first, as the tiles they stand in along it.
+    let mut walls: BTreeMap<(usize, Side), Vec<i32>> = BTreeMap::new();
     for door in doors.iter().filter(|door| door.airlock()) {
         let id = if door.left_top == -1 {
             door.right_bottom
@@ -272,34 +293,46 @@ fn airlock_strips(rooms: &[Room], doors: &[Door]) -> BTreeMap<usize, Vec<(i32, i
         } else {
             continue;
         };
-        // The walls of the room in grid pixels, and the span of the tile along
-        // the wall.
-        let (wall, span) = match side {
-            Side::Left | Side::Right => {
-                let line = match side {
-                    Side::Left => room.x * TILE,
-                    _ => (room.x + room.w) * TILE,
-                };
-                (line, (tile.1 * TILE, (tile.1 + 1) * TILE))
-            }
-            Side::Up | Side::Down => {
-                let line = match side {
-                    Side::Up => room.y * TILE,
-                    _ => (room.y + room.h) * TILE,
-                };
-                (line, (tile.0 * TILE, (tile.0 + 1) * TILE))
-            }
+        // Where the tile sits along the wall, in tiles.
+        let along = match side {
+            Side::Left | Side::Right => tile.1,
+            Side::Up | Side::Down => tile.0,
+        };
+        walls.entry((index, side)).or_default().push(along);
+    }
+
+    let mut out: BTreeMap<usize, Vec<(i32, i32, i32, i32)>> = BTreeMap::new();
+    for ((index, side), mut tiles) in walls {
+        tiles.sort_unstable();
+        let room = rooms[index];
+        // The wall in grid pixels, and whether it runs up and down.
+        let (wall, up) = match side {
+            Side::Left => (room.x * TILE, true),
+            Side::Right => ((room.x + room.w) * TILE, true),
+            Side::Up => (room.y * TILE, false),
+            Side::Down => ((room.y + room.h) * TILE, false),
         };
         // Outside the wall by `PAD`, inside it by `AIRLOCK_IN`.
         let (from, to) = match side {
             Side::Left | Side::Up => (wall - PAD, wall + AIRLOCK_IN),
             Side::Right | Side::Down => (wall - AIRLOCK_IN, wall + PAD),
         };
-        let strip = match side {
-            Side::Left | Side::Right => (from, span.0, to, span.1),
-            Side::Up | Side::Down => (span.0, from, span.1, to),
-        };
-        out.entry(index).or_default().push(strip);
+        // The doors of the wall as runs of neighbouring tiles, one strip each, the
+        // span of a run short of both its ends by `DOOR_IN`.
+        let mut at = 0;
+        while at < tiles.len() {
+            let low = tiles[at];
+            while at + 1 < tiles.len() && tiles[at + 1] == tiles[at] + 1 {
+                at += 1;
+            }
+            let span = (low * TILE + DOOR_IN, (tiles[at] + 1) * TILE - DOOR_IN);
+            at += 1;
+            let strip = match up {
+                true => (from, span.0, to, span.1),
+                false => (span.0, from, span.1, to),
+            };
+            out.entry(index).or_default().push(strip);
+        }
     }
     out
 }
