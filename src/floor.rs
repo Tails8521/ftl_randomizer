@@ -9,13 +9,14 @@
 //! What the deck looks like was measured over the 20 floors the game ships, and
 //! `src/bin/probe_floor.rs` scores the rule against every one of them: seven of
 //! the twenty are redrawn to within two hundredths of their pixels. Every room box
-//! grown by `PAD`, with each corner of a box cut by `CHAMFER`, and the strip behind
-//! every run of airlock doors left unpainted - `DOOR_IN` short of each end of the
-//! run, so a wall turns into the airlock instead of stopping before the corner - is
-//! the floor of all of them. It is painted in the two colours of the art the ship
-//! ships: a band `OUTLINE` pixels deep along the edge of the shape, and the deck
-//! colour within it. Zoltan B - the one layout that is regular all over - is off by
-//! 122 pixels of 58 490, and 228 pixels of its colour.
+//! grown by `PAD`, with each corner of a box cut by `CHAMFER`, and the deck behind
+//! every run of airlock doors taken away - `DOOR_IN` short of each end of the run,
+//! and thinning into the cut over the last `TAPER` pixels, so a wall runs out into
+//! the airlock instead of stopping before the turn - is the floor of all of them.
+//! It is painted in the two colours of the art the ship ships: a band `OUTLINE`
+//! pixels deep along the edge of the shape, and the deck colour within it. Zoltan B
+//! - the one layout that is regular all over - is off by 38 pixels of 58 490, and
+//! 221 pixels of its colour.
 //! The two ships farthest off are hand finished in ways no rule of rooms can
 //! tell: Rock A leaves three of the corridors between its rooms unpainted, and
 //! Mantis A leaves an octagonal hole in the deck of one of them, both of them
@@ -51,6 +52,15 @@ const AIRLOCK_IN: i32 = 4;
 /// two ends of the run (`temp/lock.py`). Without this the cut eats the corner of the
 /// room and the wall stops short of the turn into the airlock.
 const DOOR_IN: i32 = 5;
+
+/// How far the strip of deck grown past an airlocked wall runs out into the cut, in
+/// pixels. The strip loses one pixel of width per row as the end of the run is
+/// reached, which is how the shipped decks turn into an airlock: on Zoltan B the
+/// deck reaches six pixels past the wall up to four rows before the cut, then five,
+/// four and three pixels, and the cut takes the rest (`temp/taper.py`). Keeping that
+/// strip whole and chamfering the corners of the cut instead leaves a lip of deck
+/// standing outside the wall, which is the wrong way about.
+const TAPER: i32 = 4;
 
 /// How much of each corner of a room box is cut away. Measured on Zoltan B: the
 /// top row of a box starts three pixels in, the next two rows one pixel less.
@@ -149,10 +159,10 @@ pub struct Art {
 }
 
 /// The deck of one layout: every room of `rooms` grown by `PAD` and unioned, with
-/// the strip behind every airlock door of `doors` taken back out again, painted
-/// with the dark band of `OUTLINE` along its edge.
+/// the deck behind every run of airlock doors of `doors` taken back out again,
+/// painted with the dark band of `OUTLINE` along its edge.
 pub fn draw(rooms: &[Room], doors: &[Door], deck: &Deck) -> Result<Art, String> {
-    let strips = airlock_strips(rooms, doors);
+    let cuts = airlock_cuts(rooms, doors);
     let (wide, high) = (deck.width as usize, deck.height as usize);
     let mut mask = vec![false; wide * high];
     let mut clipped = 0;
@@ -166,7 +176,7 @@ pub fn draw(rooms: &[Room], doors: &[Door], deck: &Deck) -> Result<Art, String> 
             (room.x + room.w) * TILE + PAD,
             (room.y + room.h) * TILE + PAD,
         );
-        let holes = strips.get(&index).cloned().unwrap_or_default();
+        let holes = cuts.get(&index).map_or(NO_CUTS, Vec::as_slice);
         for gy in box_.1..box_.3 {
             for gx in box_.0..box_.2 {
                 if cut(gx - box_.0, gy - box_.1, box_.2 - box_.0, box_.3 - box_.1) {
@@ -238,35 +248,60 @@ fn cut(dx: i32, dy: i32, width: i32, height: i32) -> bool {
         || (width - 1 - dx) + (height - 1 - dy) < CHAMFER
 }
 
-/// true when an airlock strip cuts a pixel out of the deck. The four corners of a
-/// strip are exempt, chamfered like a room box, which is what turns the wall into
-/// the airlock at an angle instead of at a step.
-fn in_hole(hole: &(i32, i32, i32, i32), gx: i32, gy: i32) -> bool {
-    let (x0, y0, x1, y1) = *hole;
-    if !(x0 <= gx && gx < x1 && y0 <= gy && gy < y1) {
-        return false;
-    }
-    !cut(gx - x0, gy - y0, x1 - x0, y1 - y0)
+/// An airlock's cut: the box of deck it takes away, and which wall it is cut in.
+struct Cut {
+    /// The cleared box in grid pixels, its far edges exclusive.
+    rect: (i32, i32, i32, i32),
+    /// Which side of the room the wall is on: the side the ship's skin lies on, and
+    /// so the side the deck tapers into the cut on.
+    side: Side,
 }
 
-/// The strips to leave unpainted behind the airlock doors of each room, as grid
-/// pixel rectangles, one per run of doors on a wall.
+/// The cuts of a room with no airlock.
+const NO_CUTS: &[Cut] = &[];
+
+/// true when an airlock takes this deck: within the cut, or within the taper at the
+/// end of its run, where the strip of deck grown past the wall runs out into it.
+fn in_hole(cut: &Cut, gx: i32, gy: i32) -> bool {
+    let (x0, y0, x1, y1) = cut.rect;
+    if x0 <= gx && gx < x1 && y0 <= gy && gy < y1 {
+        return true;
+    }
+    // `deep` counts inwards from the ship's side of the cut, `short` measures how far
+    // past the ends of the run the pixel lies, one at the edge of the cut. A pixel
+    // the taper takes is within `TAPER` of both, so it is always in the strip grown
+    // past the wall and never in the room.
+    let short = match cut.side {
+        Side::Left | Side::Right => (y0 - gy).max(gy - y1 + 1),
+        Side::Up | Side::Down => (x0 - gx).max(gx - x1 + 1),
+    };
+    let deep = match cut.side {
+        Side::Left => gx - x0,
+        Side::Right => x1 - 1 - gx,
+        Side::Up => gy - y0,
+        Side::Down => y1 - 1 - gy,
+    };
+    short >= 1 && deep + short < TAPER
+}
+
+/// The cut the airlocks make in the deck of each room, as grid pixel boxes, one per
+/// run of doors on a wall.
 ///
-/// A strip covers the tiles its doors stand in, from `PAD` outside the wall to
+/// A cut covers the tiles its doors stand in, from `PAD` outside the wall to
 /// `AIRLOCK_IN` inside it, and `DOOR_IN` short of each end of the run. It stops at
 /// the run, because the rest of the wall keeps its deck: 16 of the walls of the
 /// shipped layouts hold an airlock on one tile and nothing on the other, and the
 /// deck over the plain tile is grown like any other. Zoltan B gives no hint of it,
 /// since each of its three airlock walls is airlocked over its whole length.
 /// Anaerobic B, Kestrel B, Fed B and Mantis B do have walls like that, and taking
-/// the strip per run of doors rather than per wall lifts the first two of them from
+/// the cut per run of doors rather than per wall lifts the first two of them from
 /// 0.9318 and 0.9359 to 0.9641 and 0.9581.
 ///
 /// An airlock names its room first and `-1` second whichever side of the door
 /// the room is on, so the wall comes from the two tiles the door divides: the
 /// room owns one of them, and the wall that tile touches is the one the door
 /// lies on.
-fn airlock_strips(rooms: &[Room], doors: &[Door]) -> BTreeMap<usize, Vec<(i32, i32, i32, i32)>> {
+fn airlock_cuts(rooms: &[Room], doors: &[Door]) -> BTreeMap<usize, Vec<Cut>> {
     // The doors of each wall first, as the tiles they stand in along it.
     let mut walls: BTreeMap<(usize, Side), Vec<i32>> = BTreeMap::new();
     for door in doors.iter().filter(|door| door.airlock()) {
@@ -301,7 +336,7 @@ fn airlock_strips(rooms: &[Room], doors: &[Door]) -> BTreeMap<usize, Vec<(i32, i
         walls.entry((index, side)).or_default().push(along);
     }
 
-    let mut out: BTreeMap<usize, Vec<(i32, i32, i32, i32)>> = BTreeMap::new();
+    let mut out: BTreeMap<usize, Vec<Cut>> = BTreeMap::new();
     for ((index, side), mut tiles) in walls {
         tiles.sort_unstable();
         let room = rooms[index];
@@ -317,7 +352,7 @@ fn airlock_strips(rooms: &[Room], doors: &[Door]) -> BTreeMap<usize, Vec<(i32, i
             Side::Left | Side::Up => (wall - PAD, wall + AIRLOCK_IN),
             Side::Right | Side::Down => (wall - AIRLOCK_IN, wall + PAD),
         };
-        // The doors of the wall as runs of neighbouring tiles, one strip each, the
+        // The doors of the wall as runs of neighbouring tiles, one cut each, the
         // span of a run short of both its ends by `DOOR_IN`.
         let mut at = 0;
         while at < tiles.len() {
@@ -327,11 +362,11 @@ fn airlock_strips(rooms: &[Room], doors: &[Door]) -> BTreeMap<usize, Vec<(i32, i
             }
             let span = (low * TILE + DOOR_IN, (tiles[at] + 1) * TILE - DOOR_IN);
             at += 1;
-            let strip = match up {
+            let rect = match up {
                 true => (from, span.0, to, span.1),
                 false => (span.0, from, span.1, to),
             };
-            out.entry(index).or_default().push(strip);
+            out.entry(index).or_default().push(Cut { rect, side });
         }
     }
     out
