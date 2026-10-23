@@ -2,6 +2,7 @@
 name = "ftl_randomizer"
 version = "0.1.0"
 edition = "2024"
+default-run = "ftl_randomizer"
 
 [dependencies]
 image = "0.25"

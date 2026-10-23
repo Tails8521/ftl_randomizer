@@ -241,8 +241,8 @@ pub struct Randomizer {
 
 impl Randomizer {
     pub fn randomize_ship(&self, rng: &mut Rng, has_4_weapons_slots: bool, has_3_drones_slots: bool, has_artillery: bool) -> RandomizedShip {
-        assert_eq!(self.starting_weapons_pool.len(), ALLOWED_STARTING_WEAPONS_NAMES.len());
-        assert_eq!(self.starting_drones_pool.len(), ALLOWED_STARTING_DRONES_NAMES.len());
+        debug_assert_eq!(self.starting_weapons_pool.len(), ALLOWED_STARTING_WEAPONS_NAMES.len());
+        debug_assert_eq!(self.starting_drones_pool.len(), ALLOWED_STARTING_DRONES_NAMES.len());
         loop {
             let mut augments = Vec::new();
             let mut weapons = Vec::new();
@@ -354,7 +354,14 @@ impl Randomizer {
                 reactor += shields_level;
             }
 
-            if rng.below(2) == 0 { // if no heal system, then we'll check later if heal burst and enough missiles
+            let missiles = weapons.iter().fold(0, |acc, w| acc + (w.missiles * 10)) + rng.below(31) as i8;
+            let effective_missiles = if augments.iter().any(|a| a == "EXPLOSIVE_REPLICATOR") {
+                missiles.saturating_mul(2)
+            } else {
+                missiles
+            };
+
+            if rng.below(2) == 0 || effective_missiles < MIN_EFFECTIVE_MISSILES / 2 || !weapons.iter().any(|w| w.name == "BOMB_HEAL") {
                 if rng.below(2) == 0 {
                     systems.push(("medbay", rng.pick(&[0, 200, 10, 1])));
                 } else {
@@ -369,8 +376,13 @@ impl Randomizer {
                 systems.push(("battery", rng.pick(&[0, 9, 1])));
                 reactor -= 1;
             }
+            for &crewmate in &crew {
+                if crewmate == "energy" && rng.below(2) == 0 { // zoltans reduce reactor power half the time
+                    reactor -= 1;
+                }
+            }
 
-            if systems.iter().any(|(s, l)| *s == "drones" && *l > 0) {
+            if let Some(s) = systems.iter_mut().find(|(s, l)| *s == "drones" && *l > 0) {
                 let total_drone_power = rng.pick(&[0, 0, 4, 4, 2]);
                 let mut drone_power_available = total_drone_power;
                 let mut drone_slots_available = if has_3_drones_slots { 3 } else { 2 };
@@ -385,7 +397,8 @@ impl Randomizer {
                     }
                     drone_slots_available -= 1;
                 }
-                reactor += total_drone_power;
+                reactor += total_drone_power - 1;
+                s.1 = total_drone_power;
                 if total_drone_power < 4 && drone_slots_available > 0 && rng.below(6) == 0 {
                     // Some ships get an extra 1-2 power drone that they may be able to power on
                     loop {
@@ -397,19 +410,19 @@ impl Randomizer {
                     }
                 }
             }
-            
-            let drone_parts = rng.below(26) as i8;
+            let mut drone_parts = rng.below(11) as i8;
+            if systems.iter().any(|(s, l)| *s == "drones" && *l > 0) {
+                drone_parts += 12;
+            }
+            if systems.iter().any(|(s, l)| *s == "hacking" && *l > 0) {
+                drone_parts += 5;
+            }
             let effective_drones = if augments.iter().any(|a| a == "DRONE_RECOVERY") {
                 drone_parts * 2
             } else {
                 drone_parts
             };
-            let missiles = weapons.iter().fold(0, |acc, w| acc + (w.missiles * 10)) + rng.below(31) as i8;
-            let effective_missiles = if augments.iter().any(|a| a == "EXPLOSIVE_REPLICATOR") {
-                missiles.saturating_mul(2)
-            } else {
-                missiles
-            };
+            
             if is_weapon_loadout_viable(&weapons, effective_missiles)
             || effective_drones >= MIN_EFFECTIVE_DRONES && is_drone_loadout_viable(&drones, &weapons)
             || systems.iter().any(|(s, l)| *s == "teleporter" && *l > 0) && is_crew_tp_viable(&crew) {
