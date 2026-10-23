@@ -26,6 +26,7 @@ pub mod blueprints;
 pub mod floor;
 pub mod ftl_mod;
 pub mod layout;
+pub mod loadout;
 pub mod randomizer;
 pub mod rooms;
 pub mod rng;

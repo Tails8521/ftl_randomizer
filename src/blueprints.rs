@@ -45,7 +45,7 @@ use crate::layout::{self, Door, Layout, Room, Side, Station};
 use crate::rng::Rng;
 
 /// A byte range of the file, and the text that replaces it.
-type Patch = (Range<usize>, String);
+pub(crate) type Patch = (Range<usize>, String);
 
 /// The kind the medbay and the clone bay are counted as: one room, one machine at a
 /// time, one `<slot>` between the two.
@@ -1090,7 +1090,7 @@ fn number_range(element: &Element) -> Range<usize> {
 }
 
 /// The whitespace that opens the line `at` sits on.
-fn indent_before(text: &str, at: usize) -> String {
+pub(crate) fn indent_before(text: &str, at: usize) -> String {
     let line = text[..at].rsplit('\n').next().unwrap_or("");
     line.chars().take_while(|c| *c == ' ' || *c == '\t').collect()
 }
@@ -1114,7 +1114,7 @@ pub struct Element {
 /// quick-xml reports the byte just past each event, so a tag starts where its own
 /// text says it does. That is checked against the source: a range that does not
 /// spell the tag it claims is an error, not a guess.
-fn elements(text: &str, base: usize) -> Result<Vec<Element>, String> {
+pub(crate) fn elements(text: &str, base: usize) -> Result<Vec<Element>, String> {
     let mut reader = Reader::from_str(text);
     let mut stack: Vec<(String, Range<usize>)> = Vec::new();
     let mut out = Vec::new();
@@ -1234,7 +1234,7 @@ pub fn attribute<'a>(tag: &'a str, key: &str) -> Option<(Range<usize>, &'a str)>
 
 /// Replace each range of `text`, highest offset first, so the ranges below stay
 /// where they were found.
-fn rewrite(text: &str, patches: &[Patch]) -> Vec<u8> {
+pub(crate) fn rewrite(text: &str, patches: &[Patch]) -> Vec<u8> {
     let mut order: Vec<&Patch> = patches.iter().collect();
     order.sort_by_key(|patch| std::cmp::Reverse(patch.0.start));
     let mut out = text.as_bytes().to_vec();

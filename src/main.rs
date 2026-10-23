@@ -1,4 +1,4 @@
-//! Give every player ship a new room layout.
+//! Give every player ship a new room layout and a new loadout.
 //!
 //! All filesystem access lives here. The library only ever sees bytes: the archive
 //! is read into a buffer, edited in memory, and written back out as a `.dat` for a
@@ -14,19 +14,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ftl_randomizer::ftl_mod::FtlMod;
 use ftl_randomizer::rng::Rng;
-use ftl_randomizer::{rooms, ship_art, FtlArchive};
+use ftl_randomizer::{loadout, rooms, ship_art, FtlArchive};
 use std::collections::BTreeMap;
 
 const NAME: &str = "Random Rooms";
 const VERSION: &str = "0.1";
 const AUTHOR: &str = "ftl_randomizer";
-const DESCRIPTION: &str = "Every player ship gets a new room layout, every system \
-                           a room of its own, the deck under it redrawn to fit, \
-                           and every ship a new colour. Built from one seed: the \
-                           same seed builds the same ships.";
+const DESCRIPTION: &str = "Every player ship gets a new room layout, a new loadout \
+                           of weapons, drones, crew, augments and systems, the deck \
+                           under it redrawn to fit, and every ship a new colour. \
+                           Built from one seed: the same seed builds the same ships.";
 
 const USAGE: &str = "\
-randomize the room layout of the 28 player ships of an ftl.dat
+randomize the room layout and the loadout of the 28 player ships of an ftl.dat
 
 USAGE:
   ftl_randomizer [SEED] [OPTIONS]
@@ -41,14 +41,22 @@ OPTIONS:
   --no-dat       do not write the archive
   --no-ftl       do not write the mod
   --no-hue       leave the ship art its own colours
+  --no-loadout   leave the weapons, drones, crew, augments and systems as they are
   --extract DIR  also unpack every file of the result under DIR
   --systems      print the room each system was moved into
+  --loadout      print what each ship starts with
   --help         this text
 
 Each ship is redrawn as it flies: the hull art is cut up and moved with the
 rooms, and the deck under them is drawn again to fit, in the grey and the black
 edge the ship's own deck was painted with. The eight C hulls borrow the floor of
 the A ship as the game ships them, and are pointed at the deck drawn for them.
+
+Each ship is then equipped anew from the game's own weapon, drone and augment
+definitions: which systems it starts with and at what level, its reactor power,
+its weapons and their missiles, its drones and their parts, its crew - of any
+race - and its augments, drawn so that the ship can break a shield or put crew
+aboard.
 
 The .dat is a whole game archive: drop it over the one the game reads. The .ftl
 holds only the files that changed, which is what a mod manager wants.";
@@ -61,6 +69,9 @@ struct Args {
     ftl: Option<PathBuf>,
     extract: Option<PathBuf>,
     systems: bool,
+    /// Draw a loadout at all, and print the one that was drawn.
+    loadout_pass: bool,
+    loadout: bool,
     hue: bool,
 }
 
@@ -90,6 +101,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut rng = Rng::new(args.seed);
     let report = rooms::randomize(&mut archive, &mut rng)?;
 
+    // Then what the ships start with, into the rooms they now have.
+    let gear = match args.loadout_pass {
+        true => Some(loadout::randomize(&mut archive, &mut rng)?),
+        false => None,
+    };
+
     // Then the colours. Every layout turns by its own angle, its gibs with it.
     let mut changed = report.changed.clone();
     let mut hues: BTreeMap<String, i32> = BTreeMap::new();
@@ -98,6 +115,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let art = ship_art::recolour(&mut archive, &mut rng, &layouts)?;
         hues = art.degrees;
         changed.extend(art.changed);
+    }
+    if let Some(gear) = &gear {
+        changed.extend(gear.changed.iter().cloned());
     }
 
     println!("seed {}", args.seed);
@@ -132,8 +152,60 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    if let Some(gear) = &gear {
+        println!(
+            "\n{:<24}{:<20}{:>5}{:>5}{:>5}{:>5}{:>7}{:>7}{:>7}  crew",
+            "blueprint", "layout", "crew", "wpns", "drns", "augs", "power", "msils", "parts"
+        );
+        for ship in &gear.ships {
+            println!(
+                "{:<24}{:<20}{:>5}{:>5}{:>5}{:>5}{:>7}{:>7}{:>7}  {}",
+                ship.name,
+                ship.layout,
+                ship.crew.iter().map(|(_, number)| number).sum::<usize>(),
+                ship.weapons.len(),
+                ship.drones.len(),
+                ship.augments.len(),
+                ship.reactor,
+                ship.missiles,
+                ship.drone_parts,
+                ship.crew_text(),
+            );
+        }
+    }
+    if args.loadout {
+        for ship in gear.iter().flat_map(|gear| gear.ships.iter()) {
+            println!("\n{} on the {}", ship.name, ship.layout);
+            let list = |names: &[String]| match names.is_empty() {
+                true => "-".to_string(),
+                false => names.join(", "),
+            };
+            let row = |what: &str, with: String| println!("  {what:<12}{with}");
+            row("power", ship.reactor.to_string());
+            row("missiles", ship.missiles.to_string());
+            row("drone parts", ship.drone_parts.to_string());
+            row("crew", ship.crew_text());
+            row("weapons", list(&ship.weapons));
+            row("drones", list(&ship.drones));
+            row("augments", list(&ship.augments));
+            if !ship.artillery.is_empty() {
+                row("gun", ship.artillery.clone());
+            }
+            let systems: Vec<String> = ship
+                .systems
+                .iter()
+                .map(|(name, level)| format!("{name} {level}"))
+                .collect();
+            row("systems", systems.join(", "));
+        }
+    }
     for warning in &report.warnings {
         println!("warning: {warning}");
+    }
+    if let Some(gear) = &gear {
+        for warning in &gear.warnings {
+            println!("warning: {warning}");
+        }
     }
 
     if let Some(path) = &args.dat {
@@ -186,6 +258,8 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     let mut ftl = Some(PathBuf::from("out/random_rooms.ftl"));
     let mut extract = None;
     let mut systems = false;
+    let mut loadout_pass = true;
+    let mut loadout = false;
     let mut hue = true;
 
     let mut at = 0;
@@ -202,6 +276,8 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             "--no-dat" => dat = None,
             "--no-ftl" => ftl = None,
             "--systems" => systems = true,
+            "--loadout" => loadout = true,
+            "--no-loadout" => loadout_pass = false,
             "--no-hue" => hue = false,
             other => {
                 seed = Some(other.parse().map_err(|_| {
@@ -223,6 +299,8 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
         ftl,
         extract,
         systems,
+        loadout_pass,
+        loadout,
         hue,
     })
 }
