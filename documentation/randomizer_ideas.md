@@ -20,3 +20,5 @@ Boarding races:
 weak: engi, zoltan
 average: human, slug, lanius
 strong: rock, crystal, mantis
+
+Combat and beam drones are viable if the ship has an ion weapon (still need to evaluate the viability of ion1/stunner/chain tho)
