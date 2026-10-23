@@ -4,6 +4,7 @@
 use crate::rng::Rng;
 
 pub const MIN_EFFECTIVE_MISSILES: i8 = 28;
+pub const MIN_EFFECTIVE_DRONES: i8 = 16;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum WeaponType {
@@ -208,7 +209,7 @@ fn is_crew_tp_viable(starting_crew: &[&str]) -> bool {
     let mut strong = 0;
     for &crew in starting_crew {
         match crew {
-            "human" | "slug" |"lanius" => mid += 1,
+            "human" | "slug" |"anaerobic" => mid += 1,
             "rock" | "crystal" |"mantis" => strong += 1,
             _ => {}
         }
@@ -224,6 +225,8 @@ pub struct RandomizedShip {
     pub systems: Vec<(&'static str, usize)>,
     pub reactor: usize,
     pub artillery_weapon: &'static str, // only used on ships that have artillery system (fed)
+    pub missiles: i8,
+    pub drone_parts: i8,
 }
 
 pub struct Randomizer {
@@ -320,6 +323,7 @@ impl Randomizer {
             if has_artillery {
                 additional_systems_to_add = additional_systems_to_add.saturating_sub(1);
                 let artillery_power = rng.pick(&[0, 2, 1]);
+                systems.push(("artillery", artillery_power));
                 reactor += artillery_power;
                 artillery_weapon = if rng.below(2) == 0 {
                     "ARTILLERY_FED"
@@ -394,6 +398,12 @@ impl Randomizer {
                 }
             }
             
+            let drone_parts = rng.below(26) as i8;
+            let effective_drones = if augments.iter().any(|a| a == "DRONE_RECOVERY") {
+                drone_parts * 2
+            } else {
+                drone_parts
+            };
             let missiles = weapons.iter().fold(0, |acc, w| acc + (w.missiles * 10)) + rng.below(31) as i8;
             let effective_missiles = if augments.iter().any(|a| a == "EXPLOSIVE_REPLICATOR") {
                 missiles.saturating_mul(2)
@@ -401,7 +411,7 @@ impl Randomizer {
                 missiles
             };
             if is_weapon_loadout_viable(&weapons, effective_missiles)
-            || is_drone_loadout_viable(&drones, &weapons)
+            || effective_drones >= MIN_EFFECTIVE_DRONES && is_drone_loadout_viable(&drones, &weapons)
             || systems.iter().any(|(s, l)| *s == "teleporter" && *l > 0) && is_crew_tp_viable(&crew) {
                 systems.retain(|(_, l)| *l > 0); // Remove level 0 systems
                 return RandomizedShip {
@@ -412,6 +422,8 @@ impl Randomizer {
                     systems,
                     reactor,
                     artillery_weapon,
+                    missiles,
+                    drone_parts,
                 };
             }
         }
