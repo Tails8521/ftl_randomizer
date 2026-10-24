@@ -422,6 +422,11 @@ impl Randomizer {
             } else {
                 drone_parts
             };
+
+            if reactor > 11 {
+                // more reactor than mantis B is crazy
+                continue;
+            }
             
             if is_weapon_loadout_viable(&weapons, effective_missiles)
             || effective_drones >= MIN_EFFECTIVE_DRONES && is_drone_loadout_viable(&drones, &weapons)

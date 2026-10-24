@@ -17,7 +17,7 @@ use ftl_randomizer::rng::Rng;
 use ftl_randomizer::{loadout, rooms, ship_art, FtlArchive};
 use std::collections::BTreeMap;
 
-const NAME: &str = "Random Rooms";
+const NAME: &str = "FTL Randomizer";
 /// Read out of `Cargo.toml` at compile time, so a release cannot leave a mod
 /// claiming the version of the one before it.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -46,7 +46,7 @@ USAGE:
 OPTIONS:
   --in PATH      archive to read                 (default data/ftl.dat)
   --dat PATH     write the patched archive here   (default out/ftl.dat)
-  --ftl PATH     write the mod for a mod manager  (default out/random_rooms.ftl)
+  --ftl PATH     write the mod for a mod manager  (default out/randomizer.ftl)
   --no-dat       do not write the archive
   --no-ftl       do not write the mod
   --no-hue       leave the ship art its own colours
@@ -270,7 +270,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     let mut seed: Option<u64> = None;
     let mut input = PathBuf::from("data/ftl.dat");
     let mut dat = Some(PathBuf::from("out/ftl.dat"));
-    let mut ftl = Some(PathBuf::from("out/random_rooms.ftl"));
+    let mut ftl = Some(PathBuf::from("out/randomizer.ftl"));
     let mut extract = None;
     let mut systems = false;
     let mut loadout_pass = true;
