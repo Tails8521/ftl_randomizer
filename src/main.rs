@@ -12,18 +12,27 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ftl_randomizer::ftl_mod::FtlMod;
+use ftl_randomizer::ftl_mod::{FtlMod, Meta};
 use ftl_randomizer::rng::Rng;
 use ftl_randomizer::{loadout, rooms, ship_art, FtlArchive};
 use std::collections::BTreeMap;
 
 const NAME: &str = "Random Rooms";
-const VERSION: &str = "0.1";
-const AUTHOR: &str = "ftl_randomizer";
-const DESCRIPTION: &str = "Every player ship gets a new room layout, a new loadout \
-                           of weapons, drones, crew, augments and systems, the deck \
-                           under it redrawn to fit, and every ship a new colour. \
-                           Built from one seed: the same seed builds the same ships.";
+/// Read out of `Cargo.toml` at compile time, so a release cannot leave a mod
+/// claiming the version of the one before it.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const AUTHOR: &str = env!("CARGO_PKG_NAME");
+/// The thread the manager links from the mod. Also read out of `Cargo.toml`.
+const THREAD_URL: &str = env!("CARGO_PKG_HOMEPAGE");
+
+/// What the mod manager shows as the description. The seed belongs here: it is the
+/// only way back to the ships of a `.ftl` once the run that drew them is gone, so
+/// a mod found in a folder months later can still be drawn again.
+fn description(seed: u64) -> String {
+    format!(
+        "Made with {AUTHOR} {VERSION} from seed {seed}.",
+    )
+}
 
 const USAGE: &str = "\
 randomize the room layout and the loadout of the 28 player ships of an ftl.dat
@@ -225,7 +234,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .ok_or_else(|| io::Error::other(format!("the archive lost {changed}")))?;
             module.add(changed, payload);
         }
-        module.describe(NAME, VERSION, AUTHOR, DESCRIPTION);
+        module.describe(&Meta {
+            title: NAME,
+            thread_url: THREAD_URL,
+            author: AUTHOR,
+            version: VERSION,
+            description: &description(args.seed),
+        });
         let packed = module.to_bytes();
         write(path, &packed)?;
         println!(

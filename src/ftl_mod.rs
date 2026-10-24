@@ -36,6 +36,20 @@ const VERSION: u16 = 20;
 const DOS_TIME: u16 = 0;
 const DOS_DATE: u16 = 0x0021;
 
+/// What the manifest says about a mod. The manager reads the file strictly and
+/// refuses it whole - listing the mod with a placeholder description - when a tag
+/// is missing, so all five are filled in, in the order the example mod files them.
+#[derive(Debug)]
+pub struct Meta<'a> {
+    pub title: &'a str,
+    /// The thread the manager links to. The example mod expects a mod thread to
+    /// exist and says to open one; until this has one the modding board is linked.
+    pub thread_url: &'a str,
+    pub author: &'a str,
+    pub version: &'a str,
+    pub description: &'a str,
+}
+
 /// A mod, complete, in memory.
 #[derive(Debug, Default)]
 pub struct FtlMod {
@@ -53,16 +67,28 @@ impl FtlMod {
         self.files.insert(path.to_string(), bytes.to_vec());
     }
 
-    /// The description a mod manager reads. `mod-appendix/` is read by the manager
-    /// and never handed to the game.
-    pub fn describe(&mut self, name: &str, version: &str, author: &str, description: &str) {
+    /// The description a mod manager reads, as `mod-appendix/metadata.xml`.
+    /// `mod-appendix/` is read by the manager and never handed to the game.
+    ///
+    /// The shape is that of `reference/Engi Scrap Advantage 1.2.ftl`, the example
+    /// mod the manager ships: a `<metadata>` root - not `<mod>` - with the five
+    /// tags of [`Meta`], each value inside a CDATA section padded with spaces,
+    /// which the manager trims.
+    pub fn describe(&mut self, meta: &Meta) {
         let text = format!(
-            "<mod>\r\n\t<name>{}</name>\r\n\t<version>{}</version>\r\n\t<author>{}</author>\r\n\
-             \t<description>{}</description>\r\n</mod>\r\n",
-            escaped(name),
-            escaped(version),
-            escaped(author),
-            escaped(description)
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n\
+             <metadata>\r\n\
+             \t<title>{}</title>\r\n\
+             \t<threadUrl>{}</threadUrl>\r\n\
+             \t<author>{}</author>\r\n\
+             \t<version>{}</version>\r\n\
+             \t<description>\r\n{}\r\n\t</description>\r\n\
+             </metadata>\r\n",
+            cdata(meta.title),
+            cdata(meta.thread_url),
+            cdata(meta.author),
+            cdata(meta.version),
+            cdata(meta.description),
         );
         self.add("mod-appendix/metadata.xml", text.as_bytes());
     }
@@ -171,19 +197,11 @@ fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
-/// XML text, so a description cannot write tags.
-fn escaped(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            _ => out.push(ch),
-        }
-    }
-    out
+/// One value of the manifest, wrapped in a CDATA section so that nothing has to
+/// be escaped. A section ends at the first `]]>`, which none of these values - a
+/// name, a version, a sentence and a number - can hold.
+fn cdata(text: &str) -> String {
+    format!("<![CDATA[ {text} ]]>")
 }
 
 fn number16(out: &mut Vec<u8>, value: u16) {
