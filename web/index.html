@@ -182,10 +182,12 @@ seed.addEventListener('keydown', (event) => {
 });
 seed.addEventListener('input', check);
 ftlButton.addEventListener('click', () => {
+  if (!mod) return stale();
   save(mod, `randomizer-${drawn}.ftl`);
   say(`Saved randomizer-${drawn}.ftl (${size(mod.length)}): install it with a mod manager.`, false);
 });
 datButton.addEventListener('click', () => {
+  if (!mod) return stale();
   work(true, 'Packing the whole archive, about 270 MiB, it should take a few seconds.');
   worker.postMessage({ type: 'dat' });
 });
@@ -244,6 +246,14 @@ function say(text, error) {
   status.classList.toggle('error', Boolean(error));
 }
 
+/** A button that should have been locked: say what is missing instead of saving
+ * nothing. A reload hands the page back with its buttons as they were, and the
+ * archive went with the page before it. */
+function stale() {
+  work(false);
+  say('Nothing is loaded: choose an ftl.dat first.', true);
+}
+
 /** Lock the page while the worker is busy. */
 function work(on, text) {
   busy = on;
@@ -264,6 +274,10 @@ function save(bytes, filename) {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
+
+// A reload gives the controls back looking as they were left, with nothing behind
+// them, so the page starts by locking what it cannot do.
+work(false);
 
 if (location.protocol === 'file:') {
   say('This page has to be served over http: run `python3 -m http.server 8000 -d web` in the '

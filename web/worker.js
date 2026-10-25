@@ -21,7 +21,7 @@ self.onmessage = async (event) => {
     } else if (message.type === 'reseed') {
       redraw(message.seed);
     } else if (message.type === 'dat') {
-      say('dat', { dat: job.dat() });
+      say('dat', { dat: loaded().dat() });
     } else {
       throw new Error(`unknown message ${message.type}`);
     }
@@ -47,11 +47,17 @@ function draw(buffer, seed) {
 
 /** Draw the ships again from a new seed, with the archive that is loaded. */
 function redraw(seed) {
-  if (!job) {
-    throw new Error('Choose an ftl.dat first.');
-  }
-  job.reseed(seed);
+  loaded().reseed(seed);
   ready();
+}
+
+/** The archive that is loaded. A message that arrives without one - a page that
+ * was reloaded and given back its buttons - has to say so. */
+function loaded() {
+  if (!job) {
+    throw new Error('Nothing is loaded: choose an ftl.dat first.');
+  }
+  return job;
 }
 
 /** Tell the page what was just drawn. */
