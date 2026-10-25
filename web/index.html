@@ -75,7 +75,7 @@
 
 <h1>FTL Randomizer</h1>
 <p class="sub">
-  New room layouts, loadouts and colours for the 28 player ships, drawn from one seed.
+  Random room layouts, loadouts and colours for the 28 player ships.
 </p>
 
 <label id="drop" for="file" tabindex="0">
@@ -88,7 +88,7 @@
   <label for="seed">Seed</label>
   <input id="seed" type="number" min="0" max="9007199254740991" step="1">
 </div>
-<p class="hint">The same seed always draws the same ships, so a seed is worth writing down.</p>
+<p class="hint">The same seed always generates the same ships.</p>
 
 <p id="status" role="status">Choose an ftl.dat to start.</p>
 
@@ -101,11 +101,10 @@
 <div class="row">
   <button id="dat" disabled>Save ftl.dat</button>
   <p>The whole patched archive, for a plain install: you put it over the game's ftl.dat.
-     <strong>Back your original ftl.dat up first</strong> - once it is overwritten the ships
-     it drew are gone, and this page cannot give it back to you.</p>
+     <strong>Back your original ftl.dat up first</strong></p>
 </div>
 
-<footer>Nothing leaves your machine: the archive is read and written in this tab.</footer>
+<footer>Nothing leaves your computer: the archive is read and written in this tab, no additional upload or download.</footer>
 
 <script>
 const drop = document.getElementById('drop');
@@ -135,8 +134,8 @@ worker.onmessage = (event) => {
     mod = message.ftl;
     drawn = message.seed;
     dropTitle.textContent = picked;
-    dropHint.textContent = 'drawn - drop another ftl.dat to draw again';
-    const about = `Seed ${message.seed} drawn: ${message.changed} files of the game changed. Save one of the two.`;
+    dropHint.textContent = '';
+    const about = `Seed ${message.seed} generated: Save one of the two.`;
     const warnings = message.warnings.map((warning) => `warning: ${warning}`).join(' ');
     say(warnings ? `${about} ${warnings}` : about, message.warnings.length > 0);
     work(false);
@@ -186,7 +185,7 @@ datButton.addEventListener('click', () => {
 async function take(chosen) {
   if (!chosen || busy) return;
   picked = chosen.name;
-  work(true, `Reading ${chosen.name} (${size(chosen.size)}), then drawing the ships - a few seconds, longer on an old machine.`);
+  work(true, `Reading ${chosen.name} (${size(chosen.size)}), then generating the ships, it should take a few seconds.`);
   mod = null;
   const buffer = await chosen.arrayBuffer();
   worker.postMessage({ type: 'open', buffer, seed: seedValue() }, [buffer]);
