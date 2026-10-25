@@ -12,27 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ftl_randomizer::ftl_mod::{FtlMod, Meta};
-use ftl_randomizer::rng::Rng;
-use ftl_randomizer::{loadout, rooms, ship_art, FtlArchive};
-use std::collections::BTreeMap;
-
-const NAME: &str = "FTL Randomizer";
-/// Read out of `Cargo.toml` at compile time, so a release cannot leave a mod
-/// claiming the version of the one before it.
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-const AUTHOR: &str = env!("CARGO_PKG_NAME");
-/// The thread the manager links from the mod. Also read out of `Cargo.toml`.
-const THREAD_URL: &str = env!("CARGO_PKG_HOMEPAGE");
-
-/// What the mod manager shows as the description. The seed belongs here: it is the
-/// only way back to the ships of a `.ftl` once the run that drew them is gone, so
-/// a mod found in a folder months later can still be drawn again.
-fn description(seed: u64) -> String {
-    format!(
-        "Made with {AUTHOR} {VERSION} from seed {seed}.",
-    )
-}
+use ftl_randomizer::pipeline::{self, Options};
 
 const USAGE: &str = "\
 randomize the room layout and the loadout of the 28 player ships of an ftl.dat
@@ -99,35 +79,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let bytes = fs::read(&args.input)
         .map_err(|error| format!("cannot read {}: {error}", args.input.display()))?;
-    let mut archive = FtlArchive::from_bytes(&bytes)?;
+    let (archive, drawn) = pipeline::process(
+        &bytes,
+        args.seed,
+        &Options {
+            hue: args.hue,
+            loadout: args.loadout_pass,
+        },
+    )?;
     println!(
         "read {} files from {} ({})",
-        archive.len(),
+        drawn.read,
         args.input.display(),
         size(bytes.len())
     );
 
-    let mut rng = Rng::new(args.seed);
-    let report = rooms::randomize(&mut archive, &mut rng)?;
-
-    // Then what the ships start with, into the rooms they now have.
-    let gear = match args.loadout_pass {
-        true => Some(loadout::randomize(&mut archive, &mut rng)?),
-        false => None,
-    };
-
-    // Then the colours. Every layout turns by its own angle, its gibs with it.
-    let mut changed = report.changed.clone();
-    let mut hues: BTreeMap<String, i32> = BTreeMap::new();
-    if args.hue {
-        let layouts: Vec<String> = report.ships.iter().map(|ship| ship.layout.clone()).collect();
-        let art = ship_art::recolour(&mut archive, &mut rng, &layouts)?;
-        hues = art.degrees;
-        changed.extend(art.changed);
-    }
-    if let Some(gear) = &gear {
-        changed.extend(gear.changed.iter().cloned());
-    }
+    let report = &drawn.rooms;
+    let gear = drawn.gear.as_ref();
+    let hues = &drawn.hues;
+    let changed = &drawn.changed;
 
     println!("seed {}", args.seed);
     println!(
@@ -227,27 +197,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     if let Some(path) = &args.ftl {
-        let mut module = FtlMod::new();
-        for changed in &changed {
-            let payload = archive
-                .get_file(changed)
-                .ok_or_else(|| io::Error::other(format!("the archive lost {changed}")))?;
-            module.add(changed, payload);
-        }
-        module.describe(&Meta {
-            title: NAME,
-            thread_url: THREAD_URL,
-            author: AUTHOR,
-            version: VERSION,
-            description: &description(args.seed),
-        });
-        let packed = module.to_bytes();
-        write(path, &packed)?;
+        write(path, &drawn.ftl)?;
         println!(
             "wrote the mod to {} ({}): {} changed files, install it with a mod manager",
             path.display(),
-            size(packed.len()),
-            module.len()
+            size(drawn.ftl.len()),
+            // The changed files and the metadata the mod manager reads.
+            changed.len() + 1,
         );
     }
 

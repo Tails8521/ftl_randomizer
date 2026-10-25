@@ -1,0 +1,244 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FTL Randomizer</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --ink: #cfe6ef;
+    --dull: #7f9aa6;
+    --line: #2b4450;
+    --glow: #6fd3ff;
+    --warn: #ffc078;
+    --back: #0c1418;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0 auto;
+    padding: 2rem 1rem 4rem;
+    max-width: 46rem;
+    background: var(--back);
+    color: var(--ink);
+    font: 16px/1.5 system-ui, sans-serif;
+  }
+  h1 { margin: 0 0 .25rem; font-size: 1.6rem; letter-spacing: .08em; text-transform: uppercase; }
+  .sub { margin: 0 0 1.5rem; color: var(--dull); }
+  #drop {
+    display: grid;
+    gap: .35rem;
+    place-content: center;
+    min-height: 11rem;
+    padding: 1.5rem;
+    border: 2px dashed var(--line);
+    border-radius: .6rem;
+    text-align: center;
+    cursor: pointer;
+  }
+  #drop:hover, #drop.over { border-color: var(--glow); }
+  #drop.waiting { border-color: var(--glow); opacity: .6; }
+  #drop strong { font-size: 1.15rem; font-weight: 600; }
+  .hint { color: var(--dull); font-size: .9rem; }
+  .row { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; margin-top: 1.25rem; }
+  .row p { flex: 1 1 20rem; margin: .3rem 0 0; color: var(--dull); font-size: .9rem; }
+  label { color: var(--dull); }
+  input[type=number] {
+    width: 15rem;
+    padding: .45rem .6rem;
+    background: #101d23;
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: .35rem;
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+  }
+  input[type=number]:focus-visible, button:focus-visible, #drop:focus-visible {
+    outline: 2px solid var(--glow);
+    outline-offset: 2px;
+  }
+  button {
+    padding: .6rem 1.1rem;
+    background: #14262e;
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: .35rem;
+    font: inherit;
+    cursor: pointer;
+    min-width: 11rem;
+  }
+  button:hover:enabled { border-color: var(--glow); color: var(--glow); }
+  button:disabled { opacity: .45; cursor: default; }
+  #status { margin: 1.5rem 0 0; min-height: 1.5rem; }
+  #status.error { color: var(--warn); }
+  #status code { color: var(--glow); }
+  footer { margin-top: 3rem; color: var(--dull); font-size: .85rem; }
+</style>
+
+<h1>FTL Randomizer</h1>
+<p class="sub">
+  New room layouts, loadouts and colours for the 28 player ships, drawn from one seed.
+</p>
+
+<label id="drop" for="file" tabindex="0">
+  <strong id="dropTitle">Drop your ftl.dat here, or click to choose it</strong>
+  <span class="hint" id="dropHint">the game's own archive, about 270 MiB - inside the FTL folder</span>
+</label>
+<input id="file" type="file" accept=".dat" hidden>
+
+<div class="row">
+  <label for="seed">Seed</label>
+  <input id="seed" type="number" min="0" max="9007199254740991" step="1">
+</div>
+<p class="hint">The same seed always draws the same ships, so a seed is worth writing down.</p>
+
+<p id="status" role="status">Choose an ftl.dat to start.</p>
+
+<div class="row">
+  <button id="ftl" disabled>Save .ftl mod</button>
+  <p><strong>Recommended.</strong> A mod for a mod manager: only the files that changed,
+     and the game's own ftl.dat is left alone.</p>
+</div>
+
+<div class="row">
+  <button id="dat" disabled>Save ftl.dat</button>
+  <p>The whole patched archive, for a plain install: you put it over the game's ftl.dat.
+     <strong>Back your original ftl.dat up first</strong> - once it is overwritten the ships
+     it drew are gone, and this page cannot give it back to you.</p>
+</div>
+
+<footer>Nothing leaves your machine: the archive is read and written in this tab.</footer>
+
+<script>
+const drop = document.getElementById('drop');
+const dropTitle = document.getElementById('dropTitle');
+const dropHint = document.getElementById('dropHint');
+const file = document.getElementById('file');
+const seed = document.getElementById('seed');
+const status = document.getElementById('status');
+const ftlButton = document.getElementById('ftl');
+const datButton = document.getElementById('dat');
+
+// A seed to start from, so two visits never draw the same ships by accident.
+seed.value = randomSeed();
+
+/** The mod, as it was drawn. Kept until the next archive is dropped. */
+let mod = null;
+/** The seed of that drawing, used in the file names. */
+let drawn = null;
+/** The file that was dropped, to name it in the zone once it is drawn. */
+let picked = null;
+let busy = false;
+
+const worker = new Worker('worker.js', { type: 'module' });
+worker.onmessage = (event) => {
+  const message = event.data;
+  if (message.type === 'ready') {
+    mod = message.ftl;
+    drawn = message.seed;
+    dropTitle.textContent = picked;
+    dropHint.textContent = 'drawn - drop another ftl.dat to draw again';
+    const about = `Seed ${message.seed} drawn: ${message.changed} files of the game changed. Save one of the two.`;
+    const warnings = message.warnings.map((warning) => `warning: ${warning}`).join(' ');
+    say(warnings ? `${about} ${warnings}` : about, message.warnings.length > 0);
+    work(false);
+  } else if (message.type === 'dat') {
+    save(message.dat, 'ftl.dat');
+    say(`Saved a whole ftl.dat for seed ${drawn}. Copy it over the game's - the one you backed up is the only way back.`, false);
+    work(false);
+  } else if (message.type === 'error') {
+    say(message.message, true);
+    work(false);
+  }
+};
+worker.onerror = () => {
+  say('The randomizer did not start. This page has to be served over http: run ' +
+      '`python3 -m http.server 8000 -d web` in the project and open http://localhost:8000.', true);
+  work(false);
+};
+
+// Dropping a file on the page instead of the zone would navigate away from it.
+for (const kind of ['dragenter', 'dragover', 'drop']) {
+  document.addEventListener(kind, (event) => event.preventDefault());
+}
+for (const kind of ['dragenter', 'dragover']) {
+  drop.addEventListener(kind, (event) => { event.preventDefault(); drop.classList.add('over'); });
+}
+for (const kind of ['dragleave', 'drop']) {
+  drop.addEventListener(kind, (event) => { event.preventDefault(); drop.classList.remove('over'); });
+}
+drop.addEventListener('drop', (event) => take(event.dataTransfer.files[0]));
+drop.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    file.click();
+  }
+});
+file.addEventListener('change', () => take(file.files[0]));
+ftlButton.addEventListener('click', () => {
+  save(mod, `randomizer-${drawn}.ftl`);
+  say(`Saved randomizer-${drawn}.ftl (${size(mod.length)}): install it with a mod manager.`, false);
+});
+datButton.addEventListener('click', () => {
+  work(true, 'Packing the whole archive, about 270 MiB - a few seconds, longer on an old machine.');
+  worker.postMessage({ type: 'dat' });
+});
+
+/** Read a dropped or chosen file and hand it to the worker. */
+async function take(chosen) {
+  if (!chosen || busy) return;
+  picked = chosen.name;
+  work(true, `Reading ${chosen.name} (${size(chosen.size)}), then drawing the ships - a few seconds, longer on an old machine.`);
+  mod = null;
+  const buffer = await chosen.arrayBuffer();
+  worker.postMessage({ type: 'open', buffer, seed: seedValue() }, [buffer]);
+}
+
+/** The number in the seed box. A blank or broken one is drawn again. */
+function seedValue() {
+  const value = Math.floor(Number(seed.value));
+  if (seed.value.trim() === '' || !Number.isInteger(value) || value < 0) {
+    seed.value = randomSeed();
+    return Number(seed.value);
+  }
+  return Math.min(value, Number.MAX_SAFE_INTEGER);
+}
+
+/** A byte count a person can read. */
+function size(bytes) {
+  return `${(bytes / 1048576).toFixed(1)} MiB`;
+}
+
+function randomSeed() {
+  return 1 + crypto.getRandomValues(new Uint32Array(1))[0] % 999999999;
+}
+
+/** Show what is happening. An error is worth a different colour. */
+function say(text, error) {
+  status.textContent = text;
+  status.classList.toggle('error', Boolean(error));
+}
+
+/** Lock the page while the worker is busy. */
+function work(on, text) {
+  busy = on;
+  if (text) say(text, false);
+  ftlButton.disabled = on || !mod;
+  datButton.disabled = on || !mod;
+  file.disabled = on;
+  drop.classList.toggle('waiting', on);
+}
+
+/** Offer bytes as a download. */
+function save(bytes, filename) {
+  const url = URL.createObjectURL(new Blob([bytes]));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+if (location.protocol === 'file:') {
+  say('This page has to be served over http: run `python3 -m http.server 8000 -d web` in the '
+      + 'project and open http://localhost:8000.', true);
+}
+</script>

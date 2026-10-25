@@ -1,10 +1,30 @@
 [package]
 name = "ftl_randomizer"
-version = "0.1.0"
+version = "1.0.0"
 homepage = "https://github.com/Tails8521/ftl_randomizer"
 edition = "2024"
 default-run = "ftl_randomizer"
 
+[lib]
+# `cdylib` is what the web target needs to get a `.wasm` out of the library, and
+# `rlib` is what the command line and the probes link.
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
-image = "0.25"
+# Only png: the archive holds nothing else, and the other codecs pull in a third
+# of the dependency tree and do not build for wasm.
+image = { version = "0.25", default-features = false, features = ["png"] }
 quick-xml = "0.41.0"
+# The `wasm-bindgen` CLI has to be the same version as the library, so this is
+# pinned and `web/build.sh` checks it.
+wasm-bindgen = { version = "=0.2.100", optional = true }
+
+[features]
+# The webassembly front end in `src/web.rs`. Built for the web target with
+# `--features web`, see `web/build.sh`.
+web = ["dep:wasm-bindgen"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
