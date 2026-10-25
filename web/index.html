@@ -76,7 +76,7 @@
 
 <h1>FTL Randomizer</h1>
 <p class="sub">
-  Random room layouts, loadouts and colours for the 28 player ships.
+  Random room layouts, loadouts and colors for the 28 player ships.
 </p>
 
 <label id="drop" for="file" tabindex="0">
@@ -240,7 +240,7 @@ function randomSeed() {
   return 1 + crypto.getRandomValues(new Uint32Array(1))[0] % 999999999;
 }
 
-/** Show what is happening. An error is worth a different colour. */
+/** Show what is happening. An error is worth a different color. */
 function say(text, error) {
   status.textContent = text;
   status.classList.toggle('error', Boolean(error));

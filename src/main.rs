@@ -29,7 +29,7 @@ OPTIONS:
   --ftl PATH     write the mod for a mod manager  (default out/randomizer.ftl)
   --no-dat       do not write the archive
   --no-ftl       do not write the mod
-  --no-hue       leave the ship art its own colours
+  --no-hue       leave the ship art its own colors
   --no-loadout   leave the weapons, drones, crew, augments and systems as they are
   --extract DIR  also unpack every file of the result under DIR
   --systems      print the room each system was moved into

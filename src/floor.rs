@@ -13,10 +13,10 @@
 //! every run of airlock doors taken away - `DOOR_IN` short of each end of the run,
 //! and thinning into the cut over the last `TAPER` pixels, so a wall runs out into
 //! the airlock instead of stopping before the turn - is the floor of all of them.
-//! It is painted in the two colours of the art the ship ships: a band `OUTLINE`
-//! pixels deep along the edge of the shape, and the deck colour within it. Zoltan B
+//! It is painted in the two colors of the art the ship ships: a band `OUTLINE`
+//! pixels deep along the edge of the shape, and the deck color within it. Zoltan B
 //! - the one layout that is regular all over - is off by 38 pixels of 58 490, and
-//! 221 pixels of its colour.
+//! 221 pixels of its color.
 //! The two ships farthest off are hand finished in ways no rule of rooms can
 //! tell: Rock A leaves three of the corridors between its rooms unpainted, and
 //! Mantis A leaves an octagonal hole in the deck of one of them, both of them
@@ -66,7 +66,7 @@ const TAPER: i32 = 4;
 /// top row of a box starts three pixels in, the next two rows one pixel less.
 const CHAMFER: i32 = 3;
 
-/// The grey of a deck with no shipped art to take the colour from. It is what
+/// The grey of a deck with no shipped art to take the color from. It is what
 /// 19 of the 20 shipped floors are painted with, `stealth_2` being the one that
 /// is a shade bluer.
 const GREY: [u8; 3] = [100, 105, 111];
@@ -76,7 +76,7 @@ const GREY: [u8; 3] = [100, 105, 111];
 const BLACK: [u8; 3] = [0, 0, 0];
 
 /// How deep that band is, measured over the 20 shipped floors: the outer two rows
-/// of the shape are the dark colour and nothing dark lies deeper. Over the 1 281
+/// of the shape are the dark color and nothing dark lies deeper. Over the 1 281
 /// 205 pixels they paint, the rule of a two pixel band and the art disagree about
 /// 6 300, which are the odd pixel at the corners of a cut, where the band was
 /// painted by hand along the curve of the corner.
@@ -91,14 +91,14 @@ pub struct Deck {
     /// The grid pixel the top left corner of the canvas stands on.
     pub x: i32,
     pub y: i32,
-    pub colour: [u8; 3],
-    /// The colour of the band along the edge of the shape.
+    pub color: [u8; 3],
+    /// The color of the band along the edge of the shape.
     pub edge: [u8; 3],
 }
 
 impl Deck {
     /// The canvas of the deck art the game ships for a layout: its size, its two
-    /// colours and `at`, the grid pixel its corner stands on.
+    /// colors and `at`, the grid pixel its corner stands on.
     pub fn shipped(art: &[u8], at: (i32, i32)) -> Result<Self, String> {
         let image = ImageReader::new(std::io::Cursor::new(art))
             .with_guessed_format()
@@ -112,12 +112,12 @@ impl Deck {
                 *counts.entry([pixel[0], pixel[1], pixel[2]]).or_default() += 1;
             }
         }
-        // The deck colour is the one the art is mostly painted with, and the edge
-        // colour the band along its shape: black for 19 of the 20 floors, and the
+        // The deck color is the one the art is mostly painted with, and the edge
+        // color the band along its shape: black for 19 of the 20 floors, and the
         // near black `stealth_2` paints itself with.
         let mut order: Vec<([u8; 3], u32)> = counts.into_iter().collect();
         order.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
-        let colour = order.first().map(|(rgb, _)| *rgb).unwrap_or(GREY);
+        let color = order.first().map(|(rgb, _)| *rgb).unwrap_or(GREY);
         let edge = order.get(1).map(|(rgb, _)| *rgb).unwrap_or(BLACK);
         let (width, height) = image.dimensions();
         Ok(Deck {
@@ -125,7 +125,7 @@ impl Deck {
             height,
             x: at.0,
             y: at.1,
-            colour,
+            color,
             edge,
         })
     }
@@ -139,7 +139,7 @@ impl Deck {
             height: hull.1,
             x: at.0,
             y: at.1,
-            colour: GREY,
+            color: GREY,
             edge: BLACK,
         }
     }
@@ -195,10 +195,10 @@ pub fn draw(rooms: &[Room], doors: &[Door], deck: &Deck) -> Result<Art, String> 
         }
     }
 
-    // The shape is painted with the two colours in a second pass, because the band
+    // The shape is painted with the two colors in a second pass, because the band
     // needs to know where the shape ends.
     let mut image = RgbaImage::from_pixel(deck.width, deck.height, Rgba([0, 0, 0, 0]));
-    let deck_paint = Rgba([deck.colour[0], deck.colour[1], deck.colour[2], 255]);
+    let deck_paint = Rgba([deck.color[0], deck.color[1], deck.color[2], 255]);
     let edge_paint = Rgba([deck.edge[0], deck.edge[1], deck.edge[2], 255]);
     let mut pixels = 0;
     for y in 0..high {

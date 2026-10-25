@@ -727,7 +727,7 @@ fn draw_ship(ship: &Ship, rooms: &[Room], doors: &[Door]) -> RgbaImage {
         } else {
             (ship.origin.0 + two.0 * TILE + TILE / 2, ship.origin.1 + two.1 * TILE)
         };
-        let colour = if door.airlock() { [60, 220, 255, 255] } else { [255, 214, 0, 255] };
+        let color = if door.airlock() { [60, 220, 255, 255] } else { [255, 214, 0, 255] };
         for step in -9..=9 {
             for thick in -2..=2 {
                 let (px, py) = if door.vertical {
@@ -735,7 +735,7 @@ fn draw_ship(ship: &Ship, rooms: &[Room], doors: &[Door]) -> RgbaImage {
                 } else {
                     (corner.0 + step, corner.1 + thick)
                 };
-                blend(&mut canvas, px, py, colour, 255);
+                blend(&mut canvas, px, py, color, 255);
             }
         }
     }
@@ -766,13 +766,13 @@ const PALETTE: [[u8; 4]; 8] = [
     [230, 220, 70, 255],
 ];
 
-fn blend(canvas: &mut RgbaImage, x: i32, y: i32, colour: [u8; 4], alpha: u8) {
+fn blend(canvas: &mut RgbaImage, x: i32, y: i32, color: [u8; 4], alpha: u8) {
     if x < 0 || y < 0 || x >= canvas.width() as i32 || y >= canvas.height() as i32 {
         return;
     }
     let under = canvas.get_pixel(x as u32, y as u32).0;
     let mix = |a: u8, b: u8| (a as u16 * (255 - alpha as u16) / 255 + b as u16 * alpha as u16 / 255) as u8;
-    canvas.put_pixel(x as u32, y as u32, Rgba([mix(under[0], colour[0]), mix(under[1], colour[1]), mix(under[2], colour[2]), 255]));
+    canvas.put_pixel(x as u32, y as u32, Rgba([mix(under[0], color[0]), mix(under[1], color[1]), mix(under[2], color[2]), 255]));
 }
 
 /// Pixels of a 1 pixel rectangle outline.
@@ -805,8 +805,8 @@ const DIGITS: [[u8; 5]; 10] = [
     [0b111, 0b101, 0b111, 0b001, 0b111],
 ];
 
-/// Draw digits with a dark shadow so they read on any room colour.
-fn draw_text(canvas: &mut RgbaImage, x: i32, y: i32, text: &str, colour: [u8; 4]) {
+/// Draw digits with a dark shadow so they read on any room color.
+fn draw_text(canvas: &mut RgbaImage, x: i32, y: i32, text: &str, color: [u8; 4]) {
     let mut cursor = x;
     for ch in text.chars() {
         let Some(digit) = ch.to_digit(10) else { continue };
@@ -815,7 +815,7 @@ fn draw_text(canvas: &mut RgbaImage, x: i32, y: i32, text: &str, colour: [u8; 4]
             for column in 0..3 {
                 if bits & (0b100 >> column) != 0 {
                     blend(canvas, cursor + column + 1, y + row as i32 + 1, [0, 0, 0, 255], 200);
-                    blend(canvas, cursor + column, y + row as i32, colour, 255);
+                    blend(canvas, cursor + column, y + row as i32, color, 255);
                 }
             }
         }

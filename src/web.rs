@@ -83,7 +83,7 @@ impl Job {
 }
 
 /// Read an `ftl.dat` and draw the 28 player ships: their rooms, their loadouts
-/// and their colours. `seed` is a whole number; the same number draws the same
+/// and their colors. `seed` is a whole number; the same number draws the same
 /// ships.
 #[wasm_bindgen]
 pub fn open(raw: Vec<u8>, seed: f64) -> Result<Job, String> {

@@ -6,7 +6,7 @@
 //!
 //! Three files per layout land in `temp/floors`: the shipped art, the drawn art
 //! and their difference, where red is a pixel one of them paints and the other
-//! does not and orange a pixel both paint in a different colour. A layout whose
+//! does not and orange a pixel both paint in a different color. A layout whose
 //! ship ships no deck art cannot be compared and is only drawn.
 //!
 //! Run `cargo run --release --bin probe_floor [LAYOUT ...] [SEED]`.
@@ -122,7 +122,7 @@ fn mispainted(old: &RgbaImage, drawn: &RgbaImage) -> (u64, u64) {
     (wrong, both)
 }
 
-/// true where the art paints the dark colour of the two it is made of.
+/// true where the art paints the dark color of the two it is made of.
 fn dark(image: &RgbaImage, x: u32, y: u32) -> bool {
     let pixel = image.get_pixel(x, y);
     let sum = pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32;
@@ -212,7 +212,7 @@ fn difference(old: &RgbaImage, drawn: &RgbaImage) -> RgbaImage {
             let b = painted(drawn, x, y);
             if a == b {
                 if a && dark(old, x, y) != dark(drawn, x, y) {
-                    // The shape agrees and the two colours do not: orange.
+                    // The shape agrees and the two colors do not: orange.
                     out.put_pixel(x, y, Rgba([240, 170, 60, 255]));
                 } else {
                     let grey = if a { [150, 150, 160, 255] } else { [16, 16, 22, 255] };

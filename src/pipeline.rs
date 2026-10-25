@@ -30,7 +30,7 @@ pub const THREAD_URL: &str = env!("CARGO_PKG_HOMEPAGE");
 /// What a run should draw, beyond the rooms.
 #[derive(Debug)]
 pub struct Options {
-    /// Turn the colours of every hull.
+    /// Turn the colors of every hull.
     pub hue: bool,
     /// Draw a new loadout for every hull.
     pub loadout: bool,
@@ -85,12 +85,12 @@ pub fn process<'a>(
         false => None,
     };
 
-    // Then the colours. Every layout turns by its own angle, its gibs with it.
+    // Then the colors. Every layout turns by its own angle, its gibs with it.
     let mut changed: BTreeSet<String> = rooms.changed.iter().cloned().collect();
     let mut hues = BTreeMap::new();
     if options.hue {
         let layouts: Vec<String> = rooms.ships.iter().map(|ship| ship.layout.clone()).collect();
-        let art = ship_art::recolour(&mut archive, &mut rng, &layouts)?;
+        let art = ship_art::recolor(&mut archive, &mut rng, &layouts)?;
         hues = art.degrees;
         changed.extend(art.changed);
     }

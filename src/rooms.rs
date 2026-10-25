@@ -182,7 +182,7 @@ pub fn randomize(archive: &mut FtlArchive, rng: &mut Rng) -> Result<Report> {
     }
 
     // Then the deck art under those rooms. Read here, once the rooms are settled
-    // and before any of it is rewritten, because the canvas and the colour come
+    // and before any of it is rewritten, because the canvas and the color come
     // off the art the game ships.
     for ship in &mut ships {
         let path = floor_image(&ship.layout);

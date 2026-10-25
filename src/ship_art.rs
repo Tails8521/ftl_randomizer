@@ -1,8 +1,8 @@
-//! Turn the colour of the player ships.
+//! Turn the color of the player ships.
 //!
 //! Each layout gets one angle, and every image that carries its name - the hull
 //! art and the six gibs - is turned by that angle, so a ship and the wreck it
-//! breaks into stay the same colour. Only the hue moves: saturation and lightness
+//! breaks into stay the same color. Only the hue moves: saturation and lightness
 //! are left alone, so a ship keeps its shading and its dark plating. Angles too
 //! small to notice are not drawn.
 //!
@@ -22,7 +22,7 @@ use crate::{Error, FtlArchive};
 const TURN_MIN: i32 = 21;
 const TURN_MAX: i32 = 339;
 
-/// What the recolour changed.
+/// What the recolor changed.
 #[derive(Debug)]
 pub struct Report {
     /// The angle each layout was turned by, in degrees.
@@ -32,9 +32,9 @@ pub struct Report {
 }
 
 /// Turn every layout of `layouts` by its own random angle. Angles too small to
-/// see are never drawn, so every ship comes back a different colour. A layout
+/// see are never drawn, so every ship comes back a different color. A layout
 /// without art of its own is left alone, and its angle is not reported.
-pub fn recolour(
+pub fn recolor(
     archive: &mut FtlArchive,
     rng: &mut Rng,
     layouts: &[String],
@@ -61,7 +61,7 @@ pub fn recolour(
                 .ok_or_else(|| Error::Format(format!("{path} vanished from the archive")))?
                 .to_vec();
             let turned = turn(&bytes, angle)
-                .map_err(|why| Error::Format(format!("cannot recolour {path}: {why}")))?;
+                .map_err(|why| Error::Format(format!("cannot recolor {path}: {why}")))?;
             if archive.set_file(path, turned) {
                 report.changed.push(path.clone());
             }
@@ -124,7 +124,7 @@ pub fn encode(image: &RgbaImage) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// The hue of a colour moved along the wheel, keeping its saturation and its
+/// The hue of a color moved along the wheel, keeping its saturation and its
 /// lightness. Both halves of the conversion are the usual HSL ones.
 fn rotate(rgb: [u8; 3], degrees: f32) -> [u8; 3] {
     let (red, green, blue) = (rgb[0] as f32 / 255., rgb[1] as f32 / 255., rgb[2] as f32 / 255.);
