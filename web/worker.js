@@ -18,6 +18,8 @@ self.onmessage = async (event) => {
 
     if (message.type === 'open') {
       draw(message.buffer, message.seed);
+    } else if (message.type === 'reseed') {
+      redraw(message.seed);
     } else if (message.type === 'dat') {
       say('dat', { dat: job.dat() });
     } else {
@@ -28,7 +30,8 @@ self.onmessage = async (event) => {
   }
 };
 
-/** Read an `ftl.dat` and draw the ships. The archive stays loaded for the `.dat`. */
+/** Read an `ftl.dat` and draw the ships. The archive stays loaded for the `.dat`
+ * and for the next seed. */
 function draw(buffer, seed) {
   const magic = new TextDecoder().decode(new Uint8Array(buffer, 0, 4));
   if (magic !== 'PKG\n') {
@@ -39,6 +42,20 @@ function draw(buffer, seed) {
 
   job?.free();
   job = open(new Uint8Array(buffer), seed);
+  ready();
+}
+
+/** Draw the ships again from a new seed, with the archive that is loaded. */
+function redraw(seed) {
+  if (!job) {
+    throw new Error('Choose an ftl.dat first.');
+  }
+  job.reseed(seed);
+  ready();
+}
+
+/** Tell the page what was just drawn. */
+function ready() {
   say('ready', {
     seed: job.seed(),
     changed: job.changed(),

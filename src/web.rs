@@ -8,6 +8,7 @@
 //! const job = ftl.open(new Uint8Array(buffer), seed);
 //! const mod = job.ftl();      // the .ftl for a mod manager
 //! const dat = job.dat();      // the whole patched ftl.dat
+//! job.reseed(seed);           // the same archive, drawn from another seed
 //! ```
 //!
 //! A `Vec<u8>` is taken by value rather than a `&[u8]`: the glue copies a slice
@@ -55,6 +56,21 @@ impl Job {
         self.seed as f64
     }
 
+    /// Draw the ships again from another seed, with the archive still loaded, so
+    /// a person who does not like the ships only has to type a number.
+    pub fn reseed(&mut self, seed: f64) -> Result<(), String> {
+        let seed = whole(seed)?;
+        // Not bound, so the archive is dropped here and stops borrowing `self.raw`
+        // before the results are written back.
+        let (_, outcome) =
+            pipeline::process(&self.raw, seed, &Options::default()).map_err(message)?;
+        self.seed = seed;
+        self.changed = outcome.changed.len();
+        self.warnings = warnings(&outcome);
+        self.ftl = outcome.ftl;
+        Ok(())
+    }
+
     /// How many files of the game changed.
     pub fn changed(&self) -> usize {
         self.changed
@@ -71,13 +87,7 @@ impl Job {
 /// ships.
 #[wasm_bindgen]
 pub fn open(raw: Vec<u8>, seed: f64) -> Result<Job, String> {
-    let seed = match seed.is_finite() {
-        true => seed.max(0.0).floor(),
-        false => return Err("the seed has to be a whole number".to_string()),
-    };
-    // f64 holds whole numbers exactly up to 2^53, which is far past any seed a
-    // person types in.
-    let seed = seed.min(u64::MAX as f64) as u64;
+    let seed = whole(seed)?;
 
     // The archive is not bound, so it is dropped here and stops borrowing `raw`
     // before the job takes it.
@@ -90,6 +100,18 @@ pub fn open(raw: Vec<u8>, seed: f64) -> Result<Job, String> {
         ftl: outcome.ftl,
         warnings,
     })
+}
+
+/// The seed a page sent, which arrives as a number. A number that is not a whole
+/// one is refused rather than rounded: the seed is worth writing down, and a
+/// rounded one would not be the number in the box.
+fn whole(seed: f64) -> Result<u64, String> {
+    match seed.is_finite() && seed.fract() == 0.0 && seed >= 0.0 {
+        // f64 holds whole numbers exactly up to 2^53, far past any seed worth
+        // typing, and the cast saturates above that.
+        true => Ok(seed.min(u64::MAX as f64) as u64),
+        false => Err("the seed has to be a whole number of 0 or more".to_string()),
+    }
 }
 
 /// The warnings of both passes, in the order the passes ran.

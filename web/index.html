@@ -67,6 +67,7 @@
   }
   button:hover:enabled { border-color: var(--glow); color: var(--glow); }
   button:disabled { opacity: .45; cursor: default; }
+  #again { min-width: 0; }
   #status { margin: 1.5rem 0 0; min-height: 1.5rem; }
   #status.error { color: var(--warn); }
   #status code { color: var(--glow); }
@@ -87,6 +88,7 @@
 <div class="row">
   <label for="seed">Seed</label>
   <input id="seed" type="number" min="0" max="9007199254740991" step="1">
+  <button id="again" disabled>Re-randomize</button>
 </div>
 <p class="hint">The same seed always generates the same ships.</p>
 
@@ -115,6 +117,7 @@ const seed = document.getElementById('seed');
 const status = document.getElementById('status');
 const ftlButton = document.getElementById('ftl');
 const datButton = document.getElementById('dat');
+const againButton = document.getElementById('again');
 
 // A seed to start from, so two visits never draw the same ships by accident.
 seed.value = randomSeed();
@@ -133,6 +136,7 @@ worker.onmessage = (event) => {
   if (message.type === 'ready') {
     mod = message.ftl;
     drawn = message.seed;
+    seed.value = message.seed; // what was drawn, so the box cannot lie about it
     dropTitle.textContent = picked;
     dropHint.textContent = '';
     const about = `Seed ${message.seed} generated: Save one of the two.`;
@@ -172,14 +176,27 @@ drop.addEventListener('keydown', (event) => {
   }
 });
 file.addEventListener('change', () => take(file.files[0]));
+againButton.addEventListener('click', redraw);
+seed.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') redraw();
+});
+seed.addEventListener('input', check);
 ftlButton.addEventListener('click', () => {
   save(mod, `randomizer-${drawn}.ftl`);
   say(`Saved randomizer-${drawn}.ftl (${size(mod.length)}): install it with a mod manager.`, false);
 });
 datButton.addEventListener('click', () => {
-  work(true, 'Packing the whole archive, about 270 MiB - a few seconds, longer on an old machine.');
+  work(true, 'Packing the whole archive, about 270 MiB, it should take a few seconds.');
   worker.postMessage({ type: 'dat' });
 });
+
+/** Draw the ships again from the seed in the box, with the archive in the worker. */
+function redraw() {
+  if (busy || !mod) return;
+  const number = seedValue();
+  work(true, `Generating seed ${number}, it should take a few seconds.`);
+  worker.postMessage({ type: 'reseed', seed: number });
+}
 
 /** Read a dropped or chosen file and hand it to the worker. */
 async function take(chosen) {
@@ -189,6 +206,17 @@ async function take(chosen) {
   mod = null;
   const buffer = await chosen.arrayBuffer();
   worker.postMessage({ type: 'open', buffer, seed: seedValue() }, [buffer]);
+}
+
+/** The two save buttons give away what is drawn, not what is typed, so say when
+ * the box and the drawing are not the same number. */
+function check() {
+  if (busy || !mod) return;
+  const off = String(drawn) !== seed.value.trim();
+  ftlButton.disabled = off;
+  datButton.disabled = off;
+  say(off ? `Seed ${drawn} is loaded. Press "Re-randomize" for seed ${seed.value.trim()}.`
+          : `Seed ${drawn} is loaded: save one of the two.`, off);
 }
 
 /** The number in the seed box. A blank or broken one is drawn again. */
@@ -222,6 +250,7 @@ function work(on, text) {
   if (text) say(text, false);
   ftlButton.disabled = on || !mod;
   datButton.disabled = on || !mod;
+  againButton.disabled = on || !mod;
   file.disabled = on;
   drop.classList.toggle('waiting', on);
 }
