@@ -8,6 +8,10 @@
 #
 #   cargo install --force wasm-bindgen-cli --version 0.2.100
 #
+# The module is built with 128 bit SIMD; that is set in `.cargo/config.toml` for the
+# webassembly target, so it needs nothing here, and it asks for a browser from 2021
+# or later (Chrome 91, Firefox 89, Safari 16.4).
+#
 # Then serve the folder and open it - the page cannot be opened from a file
 # path, because a web worker and a .wasm both have to be fetched:
 #

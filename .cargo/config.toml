@@ -1,0 +1,16 @@
+# Cargo settings for this project. Checked in, so a plain `web/build.sh` builds
+# the same module on every machine.
+
+# Webassembly is built with the 128 bit SIMD instructions. The pixel loops of the
+# png codec and of the hue turn are what a run spends its time on, and they
+# vectorize: the same seed in node went from 1460 ms to 1160 ms, drawing byte for
+# byte the same mod (`web/build.sh`, then `node` over `data/ftl.dat`).
+#
+# Support is years old in every engine - Chrome 91, Firefox 89, Safari 16.4 - so a
+# browser that cannot take it cannot run this page for other reasons either.
+#
+# `target-feature` rather than `target-cpu`, because there is no cpu to name here.
+# Note that a `RUSTFLAGS` in the environment hides this section: cargo reads one or
+# the other, not both.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]
