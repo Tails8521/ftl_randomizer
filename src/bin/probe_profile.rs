@@ -11,7 +11,7 @@
 //! than the level 9 it replaced, for 9% more bytes. The other settings are here to
 //! show what else was on the table.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::time::{Duration, Instant};
 
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
@@ -45,7 +45,6 @@ impl Laps {
     }
 }
 
-/// The compression settings an encode can be given, and what they are called.
 /// The compression settings an encode can be given, and what they are called. The
 /// first is what `ship_art::encode` uses.
 const SETTINGS: [(&str, CompressionType, FilterType); 6] = [
@@ -191,9 +190,7 @@ struct Cost {
     pixels: u64,
     decode: Duration,
     turn: Duration,
-    /// The same turn, through a table of the colors the image holds.
-    turn_table: Duration,
-    /// Colors with a pixel of them showing, which is what that table holds.
+    /// Colors with a pixel of them showing.
     colors: usize,
     /// One encode per entry of `SETTINGS`.
     encode: [Duration; SETTINGS.len()],
@@ -209,7 +206,6 @@ impl Cost {
             pixels: 0,
             decode: Duration::ZERO,
             turn: Duration::ZERO,
-            turn_table: Duration::ZERO,
             colors: 0,
             encode: [Duration::ZERO; SETTINGS.len()],
             bytes: [0; SETTINGS.len()],
@@ -222,7 +218,6 @@ impl Cost {
         self.pixels += other.pixels;
         self.decode += other.decode;
         self.turn += other.turn;
-        self.turn_table += other.turn_table;
         self.colors += other.colors;
         for (mine, theirs) in self.encode.iter_mut().zip(other.encode) {
             *mine += theirs;
@@ -240,11 +235,10 @@ impl Cost {
             self.stock / 1024
         );
         println!(
-            "    decode {:>7.1} ms   hue turn {:>7.1} ms   {} colors, turned by table in {:>7.1} ms",
+            "    decode {:>7.1} ms   hue turn {:>7.1} ms   {} colors between them",
             self.decode.as_secs_f64() * 1000.0,
             self.turn.as_secs_f64() * 1000.0,
-            self.colors,
-            self.turn_table.as_secs_f64() * 1000.0
+            self.colors
         );
         for ((name, _, _), (took, bytes)) in SETTINGS
             .iter()
@@ -291,6 +285,19 @@ fn image_work(layouts: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             deck.add(&weigh_stock(stock));
         }
     }
+    // How the same turn does with one table kept over the art of a whole ship,
+    // which is turned by one angle: the gibs are cut out of the hull, so their
+    // colors are mostly colors the hull already paid for.
+    let mut shared = Shared::new();
+    for layout in layouts {
+        let mut art: Vec<RgbaImage> = Vec::new();
+        for path in art_of(&archive, layout) {
+            art.push(decode(archive.get_file(&path).unwrap())?);
+        }
+        shared.add_layout(&art);
+    }
+    shared.print();
+    println!();
     hull.line("hull art (base)");
     gib.line("gib art");
     deck.line("deck art (encode only, no hue turn)");
@@ -348,12 +355,7 @@ fn weigh(stock: &[u8]) -> Result<Cost, Box<dyn std::error::Error>> {
     let t = Instant::now();
     let turned = turn(&image, 137.0);
     cost.turn = t.elapsed();
-
-    let t = Instant::now();
-    let by_table = turn_table(&image, 137.0);
-    cost.turn_table = t.elapsed();
     cost.colors = colors(&image);
-    assert_eq!(turned, by_table, "the table turn must draw the same pixels");
 
     for (index, (_, compression, filter)) in SETTINGS.iter().enumerate() {
         let t = Instant::now();
@@ -376,27 +378,224 @@ fn weigh_stock(stock: &[u8]) -> Cost {
     cost
 }
 
-/// The hue turn through the table of the colors the image holds: every color is
-/// converted once, whatever the number of pixels it paints.
-fn turn_table(image: &RgbaImage, degrees: f32) -> RgbaImage {
-    let mut table: std::collections::HashMap<[u8; 3], [u8; 3]> = Default::default();
+/// The hue turn of an image through whatever `turned` hands back for a color:
+/// a table of colors already converted, or the plain conversion.
+fn turn_via(image: &RgbaImage, mut turned: impl FnMut([u8; 3]) -> [u8; 3]) -> RgbaImage {
     let mut out = image.clone();
     for pixel in out.pixels_mut() {
         let [red, green, blue, alpha] = pixel.0;
         if alpha == 0 {
             continue;
         }
-        let rgb = match table.get(&[red, green, blue]) {
-            Some(&rgb) => rgb,
-            None => {
-                let rgb = rotate([red, green, blue], degrees);
-                table.insert([red, green, blue], rgb);
-                rgb
-            }
-        };
+        let rgb = turned([red, green, blue]);
         pixel.0 = [rgb[0], rgb[1], rgb[2], alpha];
     }
     out
+}
+
+/// A color as one number, which is the key a map costs least to hash.
+fn pack(rgb: [u8; 3]) -> u32 {
+    (u32::from(rgb[0]) << 16) | (u32::from(rgb[1]) << 8) | u32::from(rgb[2])
+}
+
+/// A hash of a number that is already spread over its bits: one multiply and a
+/// shift. `std`'s default hashes with SipHash, which costs more than the whole
+/// color conversion it saves.
+#[derive(Default)]
+struct Spread(u64);
+
+impl std::hash::Hasher for Spread {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+
+    fn write_u32(&mut self, number: u32) {
+        self.0 = (u64::from(number).wrapping_mul(0x9E37_79B9_7F4A_7C15)) >> 23;
+    }
+}
+
+/// A color table over a packed key and the cheap hash above.
+type Fast = HashMap<u32, [u8; 3], std::hash::BuildHasherDefault<Spread>>;
+
+/// What the art of one ship costs to turn, by scope of the table and by key.
+struct Shared {
+    pixels: u64,
+    images: usize,
+    /// The loop of the library: one conversion per pixel.
+    plain: Duration,
+    /// One table per image, per ship; and within those, the three keys.
+    image_rgb: Duration,
+    image_u32: Duration,
+    image_fast: Duration,
+    ship_rgb: Duration,
+    ship_u32: Duration,
+    ship_fast: Duration,
+    /// Colors a ship holds between its images, against the same count added up
+    /// image by image: the gap is what a shared table never converts twice.
+    union: usize,
+    sum: usize,
+}
+
+impl Shared {
+    fn new() -> Self {
+        Shared {
+            pixels: 0,
+            images: 0,
+            plain: Duration::ZERO,
+            image_rgb: Duration::ZERO,
+            image_u32: Duration::ZERO,
+            image_fast: Duration::ZERO,
+            ship_rgb: Duration::ZERO,
+            ship_u32: Duration::ZERO,
+            ship_fast: Duration::ZERO,
+            union: 0,
+            sum: 0,
+        }
+    }
+
+    fn add_layout(&mut self, art: &[RgbaImage]) {
+        // One angle per ship, as `ship_art::recolor` gives it one angle, which is
+        // what makes a table shared over a ship's art sound.
+        let degrees = 137.0;
+        let plain: Vec<RgbaImage> = art.iter().map(|image| turn(image, degrees)).collect();
+
+        let mut union: HashMap<[u8; 3], [u8; 3]> = Default::default();
+        let mut union_fast: HashMap<u32, [u8; 3]> = Default::default();
+        let mut union_spread: Fast = Default::default();
+
+        let ship = Instant::now();
+        let by_ship_rgb: Vec<RgbaImage> = art
+            .iter()
+            .map(|image| {
+                turn_via(image, |rgb| {
+                    *union
+                        .entry(rgb)
+                        .or_insert_with(|| rotate(rgb, degrees))
+                })
+            })
+            .collect();
+        let ship_rgb = ship.elapsed();
+
+        let ship = Instant::now();
+        let by_ship_u32: Vec<RgbaImage> = art
+            .iter()
+            .map(|image| {
+                turn_via(image, |rgb| {
+                    *union_fast
+                        .entry(pack(rgb))
+                        .or_insert_with(|| rotate(rgb, degrees))
+                })
+            })
+            .collect();
+        let ship_u32 = ship.elapsed();
+
+        let ship = Instant::now();
+        let by_ship_fast: Vec<RgbaImage> = art
+            .iter()
+            .map(|image| {
+                turn_via(image, |rgb| {
+                    *union_spread
+                        .entry(pack(rgb))
+                        .or_insert_with(|| rotate(rgb, degrees))
+                })
+            })
+            .collect();
+        let ship_fast = ship.elapsed();
+
+        let mut image_rgb = Duration::ZERO;
+        let mut image_u32 = Duration::ZERO;
+        let mut image_fast = Duration::ZERO;
+        let mut plain_time = Duration::ZERO;
+        for (image, want) in art.iter().zip(&plain) {
+            let t = Instant::now();
+            let made = turn(image, degrees);
+            plain_time += t.elapsed();
+            assert_eq!(*want, made);
+
+            let t = Instant::now();
+            let mut table: HashMap<[u8; 3], [u8; 3]> = Default::default();
+            let made = turn_via(image, |rgb| {
+                *table.entry(rgb).or_insert_with(|| rotate(rgb, degrees))
+            });
+            image_rgb += t.elapsed();
+            assert_eq!(*want, made, "a table must draw the pixels the loop draws");
+
+            let t = Instant::now();
+            let mut table: HashMap<u32, [u8; 3]> = Default::default();
+            let made = turn_via(image, |rgb| {
+                *table.entry(pack(rgb)).or_insert_with(|| rotate(rgb, degrees))
+            });
+            image_u32 += t.elapsed();
+            assert_eq!(*want, made);
+
+            let t = Instant::now();
+            let mut table: Fast = Default::default();
+            let made = turn_via(image, |rgb| {
+                *table.entry(pack(rgb)).or_insert_with(|| rotate(rgb, degrees))
+            });
+            image_fast += t.elapsed();
+            assert_eq!(*want, made, "the packed key must land on the same pixels");
+        }
+        assert_eq!(plain, by_ship_rgb, "a shared table must draw the same pixels");
+        assert_eq!(plain, by_ship_u32);
+        assert_eq!(plain, by_ship_fast);
+
+        self.pixels += art.iter().map(|i| (i.width() as u64) * (i.height() as u64)).sum::<u64>();
+        self.images += art.len();
+        self.plain += plain_time;
+        self.image_rgb += image_rgb;
+        self.image_u32 += image_u32;
+        self.image_fast += image_fast;
+        self.ship_rgb += ship_rgb;
+        self.ship_u32 += ship_u32;
+        self.ship_fast += ship_fast;
+        self.union += union_spread.len();
+        self.sum += art.iter().map(|image| colors(image)).sum::<usize>();
+    }
+
+    fn print(&self) {
+        println!(
+            "\n  the hue turn of the art of a ship: {} images, {} px",
+            self.images, self.pixels
+        );
+        println!(
+            "    one conversion per pixel                {:>7.1} ms",
+            self.plain.as_secs_f64() * 1000.0
+        );
+        println!(
+            "    a table per image, [u8;3] key           {:>7.1} ms  ({} colors converted)",
+            self.image_rgb.as_secs_f64() * 1000.0,
+            self.sum
+        );
+        println!(
+            "    a table per image, packed key           {:>7.1} ms",
+            self.image_u32.as_secs_f64() * 1000.0
+        );
+        println!(
+            "    a table per image, packed + cheap hash  {:>7.1} ms",
+            self.image_fast.as_secs_f64() * 1000.0
+        );
+        println!(
+            "    a table per ship,   [u8;3] key          {:>7.1} ms  ({} colors converted, {} counted image by image)",
+            self.ship_rgb.as_secs_f64() * 1000.0,
+            self.union,
+            self.sum
+        );
+        println!(
+            "    a table per ship,   packed key          {:>7.1} ms",
+            self.ship_u32.as_secs_f64() * 1000.0
+        );
+        println!(
+            "    a table per ship,   packed + cheap hash {:>7.1} ms",
+            self.ship_fast.as_secs_f64() * 1000.0
+        );
+    }
 }
 
 /// Colors with a pixel of them showing.

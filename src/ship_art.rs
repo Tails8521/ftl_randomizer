@@ -8,7 +8,8 @@
 //!
 //! Like the rest of the library this works on an archive in memory.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::io::Cursor;
 
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
@@ -55,12 +56,15 @@ pub fn recolor(
         if art.is_empty() {
             continue;
         }
+        // One angle turns the hull and all of its gibs, and the gibs are cut out of
+        // the same art, so the colors they hold are worked out once between them.
+        let mut hues: Turned = Turned::default();
         for path in art {
             let bytes = archive
                 .get_file(path)
                 .ok_or_else(|| Error::Format(format!("{path} vanished from the archive")))?
                 .to_vec();
-            let turned = turn(&bytes, angle)
+            let turned = turn(&bytes, angle, &mut hues)
                 .map_err(|why| Error::Format(format!("cannot recolor {path}: {why}")))?;
             if archive.set_file(path, turned) {
                 report.changed.push(path.clone());
@@ -91,9 +95,43 @@ fn paints(path: &str, layout: &str) -> bool {
     }
 }
 
+/// The colors of one ship's art, each with the color it turns to, by a key of the
+/// red, green and blue packed into one number.
+///
+/// [`rotate`] answers the same thing every time for one color and one angle, and
+/// the art is nearly a palette - about 2000 colors to a hull of 260 000 pixels -
+/// so a table takes the conversion off 20 million pixels and puts it on 60 000
+/// colors. A pixel of a color the table has never seen gets exactly the conversion
+/// it got before, so no pixel moves; the map is looked up and filled but never
+/// walked, so its order cannot reach a pixel either. Measured by
+/// `src/bin/probe_profile.rs`, which lands on the same images either way.
+type Turned = HashMap<u32, [u8; 3], BuildHasherDefault<Spread>>;
+
+/// A hash of a number that already spreads over its bits: one multiply, and the
+/// top half is the answer. `std` hashes with SipHash, which costs more on this
+/// path than the color conversion a miss pays for.
+#[derive(Default)]
+struct Spread(u64);
+
+impl Hasher for Spread {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+
+    fn write_u32(&mut self, number: u32) {
+        self.0 = (u64::from(number).wrapping_mul(0x9E37_79B9_7F4A_7C15)) >> 32;
+    }
+}
+
 /// The image with its hue moved by `degrees`. Grey and black pixels have no hue,
 /// and are handed back unchanged.
-fn turn(bytes: &[u8], degrees: i32) -> Result<Vec<u8>, String> {
+fn turn(bytes: &[u8], degrees: i32, hues: &mut Turned) -> Result<Vec<u8>, String> {
     let mut image = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|error| error.to_string())?
@@ -106,7 +144,10 @@ fn turn(bytes: &[u8], degrees: i32) -> Result<Vec<u8>, String> {
         if alpha == 0 {
             continue;
         }
-        let [red, green, blue] = rotate([red, green, blue], degrees as f32);
+        let key = (u32::from(red) << 16) | (u32::from(green) << 8) | u32::from(blue);
+        let [red, green, blue] = *hues
+            .entry(key)
+            .or_insert_with(|| rotate([red, green, blue], degrees as f32));
         pixel.0 = [red, green, blue, alpha];
     }
 
