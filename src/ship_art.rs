@@ -113,11 +113,16 @@ fn turn(bytes: &[u8], degrees: i32) -> Result<Vec<u8>, String> {
     encode(&image)
 }
 
-/// The image as a PNG. The stock art is packed tight, and `image` compresses
-/// loosely by default, which would leave a mod twice the size it needs to be.
+/// The image as a PNG.
+///
+/// Level 3 is the balance the whole run wants: the 196 recolored images and the
+/// 20 deck images are what a run spends its time on, and the encoder is most of
+/// that. Against level 9, level 3 draws the same pixels three times faster for 9%
+/// more bytes; level 6 sits between them and level 1 saves no time over the
+/// fastest setting here. Measured by `src/bin/probe_profile.rs`.
 pub fn encode(image: &RgbaImage) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    let encoder = PngEncoder::new_with_quality(&mut out, CompressionType::Best, FilterType::Adaptive);
+    let encoder = PngEncoder::new_with_quality(&mut out, CompressionType::Level(3), FilterType::Adaptive);
     image
         .write_with_encoder(encoder)
         .map_err(|error| error.to_string())?;
