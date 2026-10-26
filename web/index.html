@@ -147,6 +147,12 @@ worker.onmessage = (event) => {
     save(message.dat, 'ftl.dat');
     say(`Saved a whole ftl.dat for seed ${drawn}. Copy it over the game's - the one you backed up is the only way back.`, false);
     work(false);
+  } else if (message.type === 'wasm-error') {
+    // The worker is alive but the randomizer in it is not: no reason to let a
+    // person choose a 270 MiB file that cannot be read.
+    file.disabled = true;
+    say(`The randomizer did not load: ${message.message} - run \`sh web/build.sh\`, which writes `
+        + 'web/pkg, serve the web folder over http, and use a browser from 2021 or later.', true);
   } else if (message.type === 'error') {
     say(message.message, true);
     work(false);

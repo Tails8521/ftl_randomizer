@@ -5,15 +5,24 @@
 
 import init, { open } from './pkg/ftl_randomizer.js';
 
-/** The wasm module, loaded once. */
-let loading = null;
+/** The wasm module, fetched as the worker starts rather than when a file is dropped:
+ * it is 650 KiB, and a person should not have to wait for it after they let go of
+ * the file. A drop that beats the fetch waits for it below, which is what it did
+ * anyway. `web/build.sh` is what puts the module in `web/pkg`. */
+const loading = init({ module_or_path: './pkg/ftl_randomizer_bg.wasm' });
+
+// A module that cannot be fetched or read is worth saying out loud now, before
+// someone chooses a 270 MiB file for nothing. The report hangs off a second promise
+// so `loading` itself stays rejected and every message after it fails the ordinary
+// way.
+loading.catch((error) => postMessage({ type: 'wasm-error', message: text(error) }));
+
 /** The loaded archive, which holds the game bytes until the page is done. */
 let job = null;
 
 self.onmessage = async (event) => {
   const message = event.data;
   try {
-    loading ??= init({ module_or_path: './pkg/ftl_randomizer_bg.wasm' });
     await loading;
 
     if (message.type === 'open') {
