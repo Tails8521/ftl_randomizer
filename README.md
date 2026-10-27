@@ -1,12 +1,13 @@
 # FTL Randomizer
 
 A randomizer for FTL: Faster Than Light. It randomizes nearly everything about the starting ships: room layout, ship colors, starting systems, crew, weapons, drones and augments.
-It runs in a web browser, meaning you don't have to download or execute anything extra, other than maybe a mod manager if you aren't using one, but even that is optional, see below.
-TODO screenshots  
+It runs in a web browser, meaning you don't have to download or execute anything extra, other than maybe a mod manager if you aren't using one, but even that is optional, see below.  
+![Screenshot](documentation/screenshot.png)  
+"Finally! A way to experience the elusive Crystal Heavy II"
 
 ## Using the randomizer
 
-Go to TODO URL, then select or drag and drop your `ftl.dat` (default location if you have the game from Steam: `C:\Program Files (x86)\Steam\steamapps\common\FTL Faster Than Light`), then you can save the mod as a `.ftl` file for mod managers.  
+Go to [https://tails8521.github.io/ftl_randomizer/](https://tails8521.github.io/ftl_randomizer/), then select or drag and drop your `ftl.dat` (default location if you have the game from Steam: `C:\Program Files (x86)\Steam\steamapps\common\FTL Faster Than Light`), then you can save the mod as a `.ftl` file for mod managers.  
 I tested it with [Slipstream Mod Manager](https://www.subsetgames.com/forum/viewtopic.php?t=17102) but any of the more recently developed mod managers with Slipstream compatibility should also work.  
 Alternatively, you can save it as a patched `ftl.dat` if you don't want to use a mod manager, remember to back up your original `ftl.dat` first.  
 
