@@ -12,10 +12,12 @@
 # webassembly target, so it needs nothing here, and it asks for a browser from 2021
 # or later (Chrome 91, Firefox 89, Safari 16.4).
 #
-# Then serve the folder and open it - the page cannot be opened from a file
-# path, because a web worker and a .wasm both have to be fetched:
+# Then serve the project and open it - the page cannot be opened from a file
+# path, because a web worker and a .wasm both have to be fetched. The page is
+# `index.html` at the root of the repository, so the project itself is what gets
+# served, and so is what GitHub Pages serves:
 #
-#   python3 -m http.server 8000 -d web
+#   python3 -m http.server 8000 -d .
 set -e
 cd "$(dirname "$0")/.."
 
@@ -31,5 +33,5 @@ cargo build --release --target wasm32-unknown-unknown --lib --features web
 wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/ftl_randomizer.wasm
 
 echo
-echo "built web/pkg - serve the web folder and open it:"
-echo "  python3 -m http.server 8000 -d web"
+echo "built web/pkg - serve the project folder and open it:"
+echo "  python3 -m http.server 8000 -d ."

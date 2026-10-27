@@ -130,7 +130,9 @@ let drawn = null;
 let picked = null;
 let busy = false;
 
-const worker = new Worker('worker.js', { type: 'module' });
+// The page sits at the root of the repository, so it can be served as GitHub Pages,
+// and the worker it talks to stayed in `web/` with the webassembly it loads.
+const worker = new Worker('web/worker.js', { type: 'module' });
 worker.onmessage = (event) => {
   const message = event.data;
   if (message.type === 'ready') {
@@ -152,7 +154,7 @@ worker.onmessage = (event) => {
     // person choose a 270 MiB file that cannot be read.
     file.disabled = true;
     say(`The randomizer did not load: ${message.message} - run \`sh web/build.sh\`, which writes `
-        + 'web/pkg, serve the web folder over http, and use a browser from 2021 or later.', true);
+        + 'web/pkg, serve the project folder over http, and use a browser from 2021 or later.', true);
   } else if (message.type === 'error') {
     say(message.message, true);
     work(false);
@@ -160,7 +162,7 @@ worker.onmessage = (event) => {
 };
 worker.onerror = () => {
   say('The randomizer did not start. This page has to be served over http: run ' +
-      '`python3 -m http.server 8000 -d web` in the project and open http://localhost:8000.', true);
+      '`python3 -m http.server 8000 -d ./` in the project and open http://localhost:8000.', true);
   work(false);
 };
 
@@ -286,7 +288,7 @@ function save(bytes, filename) {
 work(false);
 
 if (location.protocol === 'file:') {
-  say('This page has to be served over http: run `python3 -m http.server 8000 -d web` in the '
+  say('This page has to be served over http: run `python3 -m http.server 8000 -d ./` in the '
       + 'project and open http://localhost:8000.', true);
 }
 </script>

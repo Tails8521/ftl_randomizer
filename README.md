@@ -28,4 +28,4 @@ Requires the usual Rust stuff (Cargo etc.). For the web version, see [web/build.
 Most notably you'll need the wasm32 target.  
 `rustup target add wasm32-unknown-unknown`  
 `cargo install --force wasm-bindgen-cli --version 0.2.100`  
-You will need to serve the page over http, for instance with `python3 -m http.server 8000 -d ./` because loading a .wasm module doesn't work over file://
+You will need to serve the page over http, for instance with `python3 -m http.server 8000 -d .` because loading a .wasm module doesn't work over file://
