@@ -377,7 +377,7 @@ impl Randomizer {
                 reactor -= 1;
             }
             for &crewmate in &crew {
-                if crewmate == "energy" && rng.below(2) == 0 { // zoltans reduce reactor power half the time
+                if crewmate == "energy" && reactor > 1 && rng.below(2) == 0 { // zoltans reduce reactor power half the time
                     reactor -= 1;
                 }
             }
