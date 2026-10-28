@@ -147,7 +147,7 @@ fn one(seed: u64, laps: &mut Laps, layouts: &mut Vec<String>) -> Result<Duration
     *layouts = drawn.ships.iter().map(|ship| ship.layout.clone()).collect();
     let t = Instant::now();
     let art = ship_art::recolor(&mut archive, &mut rng, layouts)?;
-    laps.lap("ship_art::recolor (hull + gib art)", t);
+    laps.lap("ship_art::recolor (hull, gib and miniship art)", t);
 
     let mut changed: BTreeSet<String> = drawn.changed.iter().cloned().collect();
     changed.extend(gear.changed.iter().cloned());
@@ -255,10 +255,10 @@ impl Cost {
 
 /// Weigh the image work of the passes one image at a time.
 ///
-/// The images of a run are the hull art and the gibs `ship_art::recolor` turns, and
-/// the deck art `rooms::randomize` draws. The stock bytes of a deck are what its
-/// replacement is measured against: the new art is a flat shape and should compress
-/// no worse than the art it replaces.
+/// The images of a run are the hull art, the gibs and the miniships
+/// `ship_art::recolor` turns, and the deck art `rooms::randomize` draws. The
+/// stock bytes of a deck are what its replacement is measured against: the new
+/// art is a flat shape and should compress no worse than the art it replaces.
 fn image_work(layouts: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let raw = std::fs::read("data/ftl.dat")?;
     let archive = FtlArchive::from_bytes(&raw)?;
@@ -266,14 +266,16 @@ fn image_work(layouts: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     println!("\nimage work, per image class");
     let mut hull = Cost::new();
     let mut gib = Cost::new();
+    let mut mini = Cost::new();
     let mut deck = Cost::new();
     for layout in layouts {
         for path in art_of(&archive, layout) {
             let stock = archive.get_file(&path).unwrap();
-            let is_gib = path.contains("_gib");
             let cost = weigh(stock)?;
-            if is_gib {
+            if path.contains("_gib") {
                 gib.add(&cost);
+            } else if path.contains("miniship") {
+                mini.add(&cost);
             } else {
                 hull.add(&cost);
             }
@@ -300,28 +302,37 @@ fn image_work(layouts: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     println!();
     hull.line("hull art (base)");
     gib.line("gib art");
+    mini.line("miniship art");
     deck.line("deck art (encode only, no hue turn)");
 
     println!("\nwhat the whole run costs at each setting (hue turn + encode)");
-    let turn = hull.turn + gib.turn + deck.turn;
+    let turn = hull.turn + gib.turn + mini.turn + deck.turn;
     for (index, (name, _, _)) in SETTINGS.iter().enumerate() {
-        let encode = hull.encode[index] + gib.encode[index] + deck.encode[index];
+        let art = [hull.encode[index], gib.encode[index], mini.encode[index], deck.encode[index]];
+        let encode: std::time::Duration = art.into_iter().sum();
         println!(
             "  {name:<18}{:>8.0} ms encode + {:>5.0} ms turn = {:>6.0} ms   mod art {:>6.0} KiB",
             encode.as_secs_f64() * 1000.0,
             turn.as_secs_f64() * 1000.0,
             (encode + turn).as_secs_f64() * 1000.0,
-            (hull.bytes[index] + gib.bytes[index] + deck.bytes[index]) / 1024
+            (hull.bytes[index] + gib.bytes[index] + mini.bytes[index] + deck.bytes[index]) / 1024
         );
     }
     Ok(())
 }
 
-/// The art `ship_art::recolor` turns for one layout: the hull and its gibs.
+/// The art `ship_art::recolor` turns for one layout: the hull, its gibs and its
+/// miniship.
 fn art_of(archive: &FtlArchive, layout: &str) -> Vec<String> {
     let mut art: Vec<String> = archive
         .paths()
         .filter(|path| {
+            if let Some(name) = path
+                .strip_prefix("img/customizeUI/miniship_")
+                .and_then(|name| name.strip_suffix(".png"))
+            {
+                return name == layout;
+            }
             let Some(name) = path
                 .strip_prefix("img/ship/")
                 .and_then(|name| name.strip_suffix(".png"))

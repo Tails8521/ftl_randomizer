@@ -1,10 +1,11 @@
 //! Turn the color of the player ships.
 //!
 //! Each layout gets one angle, and every image that carries its name - the hull
-//! art and the six gibs - is turned by that angle, so a ship and the wreck it
-//! breaks into stay the same color. Only the hue moves: saturation and lightness
-//! are left alone, so a ship keeps its shading and its dark plating. Angles too
-//! small to notice are not drawn.
+//! art, the six gibs and the small drawing of the ship select screen - is turned
+//! by that angle, so a ship, the wreck it breaks into and its icon in the
+//! customization menu all stay the same color. Only the hue moves: saturation
+//! and lightness are left alone, so a ship keeps its shading and its dark
+//! plating. Angles too small to notice are not drawn.
 //!
 //! Like the rest of the library this works on an archive in memory.
 
@@ -56,8 +57,9 @@ pub fn recolor(
         if art.is_empty() {
             continue;
         }
-        // One angle turns the hull and all of its gibs, and the gibs are cut out of
-        // the same art, so the colors they hold are worked out once between them.
+        // One angle turns the hull, all of its gibs and its miniship, and the
+        // gibs are cut out of the same art, so the colors they hold are worked
+        // out once between them.
         let mut hues: Turned = Turned::default();
         for path in art {
             let bytes = archive
@@ -76,9 +78,18 @@ pub fn recolor(
     Ok(report)
 }
 
-/// true when the image is the hull art or a gib of this layout. The names carry
-/// the layout, so `kestral_base.png` is never taken for `kestral_2_base.png`.
+/// true when the image is painted in the colors of this layout: the hull art, one
+/// of its gibs, or the `miniship_` drawing of the ship select screen. The names
+/// carry the layout, so `kestral_base.png` is never taken for
+/// `kestral_2_base.png`, and `miniship_kestral.png` never for
+/// `miniship_kestral_2.png`.
 fn paints(path: &str, layout: &str) -> bool {
+    if let Some(name) = path
+        .strip_prefix("img/customizeUI/miniship_")
+        .and_then(|name| name.strip_suffix(".png"))
+    {
+        return name == layout;
+    }
     let name = match path
         .strip_prefix("img/ship/")
         .and_then(|name| name.strip_suffix(".png"))
