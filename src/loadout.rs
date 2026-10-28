@@ -9,15 +9,25 @@
 //!   holds, and nothing invented here;
 //! * what is drawn goes back into the `<shipBlueprint>` of each player ship: the
 //!   `power` and `start` of every system, its `<weaponList>` and `<droneList>`, its
-//!   `<crewCount>` lines, its `<aug>` lines, its `<maxPower>` and, on the three
-//!   hulls that carry a gun, the `weapon` of its `<artillery>`.
+//!   `<crewCount>` lines, its `<aug>` lines, its `<maxPower>` and the `weapon` of
+//!   its `<artillery>`.
+//!
+//! Every hull of four weapon slots carries a gun, and a gun needs two things the
+//! game only ships on the three Fed hulls: an `<artillery>` tag in the system list,
+//! standing in one of the spare rooms of the layout, and a fifth `<mount>` in the
+//! `.xml` file of the layout, which is where the gun is drawn and from where it
+//! fires. Neither comes from [`crate::rooms`], which knows nothing of what a
+//! loadout asks for: the tag is filed by [`add_gun`] and the mount is put by
+//! [`fit_gun`], at the nose of the hull, halfway between its two forward turrets.
 //!
 //! Like [`crate::blueprints`] nothing is re-serialized: every change is a byte
 //! range of the file, so the comments, the spacing and the order of the blueprints
 //! come back as they went in.
 //!
-//! The rooms are drawn by [`crate::rooms`] before this runs, and this only writes
-//! what the file already holds. A player ship declares every system it can ever
+//! The rooms are drawn by [`crate::rooms`] before this runs, and this changes
+//! nothing about them: the gun of a hull the game ships without one is filed in a
+//! room no other system of the hull was handed, of the three the layout has spare.
+//! A player ship declares every system it can ever
 //! have - the game draws a system badly when the blueprint of a player ship leaves
 //! it out, and a ship can then never buy it - so a loadout only decides which of
 //! the declared systems the ship starts with and at what level, and the room the
@@ -28,14 +38,15 @@
 //! pick them, and they declare no clone bay, no battery, no mind control and no
 //! hacking, so they could not house what is drawn for them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::ops::Range;
 
 use crate::blueprints::{self, Blueprint, Element};
+use crate::ship_txt::ShipTxt;
 use crate::randomizer::{
-    ALLOWED_STARTING_DRONES_NAMES, ALLOWED_STARTING_WEAPONS_NAMES, Augment, Randomizer,
-    StartingDrone, StartingWeapon, WeaponType,
+    ALLOWED_STARTING_DRONES_NAMES, ALLOWED_STARTING_WEAPONS_NAMES, Augment, RandomizedShip,
+    Randomizer, StartingDrone, StartingWeapon, WeaponType,
 };
 use crate::rng::Rng;
 use crate::FtlArchive;
@@ -102,8 +113,10 @@ pub struct Ship {
     pub reactor: usize,
     pub missiles: i8,
     pub drone_parts: i8,
-    /// The gun of a hull that has one, empty on every other.
+    /// The gun of a hull that starts with one, empty on every other.
     pub artillery: String,
+    /// The room the gun stands in, on the hulls that carry one.
+    pub gun_room: Option<usize>,
 }
 
 impl Ship {
@@ -133,6 +146,9 @@ pub fn randomize(archive: &mut FtlArchive, rng: &mut Rng) -> Result<Report> {
     let mut ships = Vec::new();
     let mut changed = Vec::new();
     let mut warnings = Vec::new();
+    // The layouts of the hulls that carry a gun of their own, which is one per
+    // layout and not one per blueprint: the mount belongs to the hull.
+    let mut guns: BTreeSet<String> = BTreeSet::new();
 
     for path in archive.paths().map(str::to_string).collect::<Vec<_>>() {
         if !path.starts_with("data/") || !path.ends_with(".xml") {
@@ -165,15 +181,25 @@ pub fn randomize(archive: &mut FtlArchive, rng: &mut Rng) -> Result<Report> {
                 &text,
                 &blueprint,
                 &randomizer,
+                archive,
                 rng,
                 &mut patches,
                 &mut warnings,
+                &mut guns,
             )?);
         }
 
         if ships.len() > before && !patches.is_empty() {
             archive.set_file(&path, blueprints::rewrite(&text, &patches.into_edits()));
             changed.push(path);
+        }
+    }
+
+    // Then the hulls themselves: a gun is drawn at the fifth weapon mount of the
+    // layout, and only the Fed hulls ship one.
+    for layout in &guns {
+        if fit_gun(archive, layout, &mut warnings) {
+            changed.push(layout_xml(layout));
         }
     }
 
@@ -184,14 +210,19 @@ pub fn randomize(archive: &mut FtlArchive, rng: &mut Rng) -> Result<Report> {
     })
 }
 
-/// Draw one ship and note the edits that write it.
+/// Draw one ship and note the edits that write it. `archive` is only read, for the
+/// layout file the rooms of the hull were written in, and `guns` collects the
+/// layouts that end up carrying a gun, so that their mount is written once the
+/// blueprints are.
 fn loadout(
     text: &str,
     blueprint: &Blueprint,
     randomizer: &Randomizer,
+    archive: &FtlArchive,
     rng: &mut Rng,
     patches: &mut Patches,
     warnings: &mut Vec<String>,
+    guns: &mut BTreeSet<String>,
 ) -> Result<Ship> {
     // One walk of the blueprint, and every range it hands back is in the file.
     let inside =
@@ -212,21 +243,41 @@ fn loadout(
             .collect(),
         None => Vec::new(),
     };
+    // `<weaponSlots>4</weaponSlots>` numbers itself between its own two tags, and a
+    // blueprint that files neither tag is read as a ship of no slots at all.
     let slots = |tag: &str| -> usize {
         parts
             .iter()
             .find(|element| element.name == tag)
-            .and_then(|element| child_text(text, &inside, element).and_then(|v| v.parse().ok()))
+            .and_then(|element| between(text, element))
+            .and_then(|v| v.parse().ok())
             .unwrap_or(0)
     };
-    let has_gun = systems.iter().any(|element| element.name == "artillery");
+    let four_slots = slots("weaponSlots") >= 4;
+    let drawn = randomizer.randomize_ship(rng, four_slots, slots("droneSlots") >= 3);
 
-    let drawn = randomizer.randomize_ship(
-        rng,
-        slots("weaponSlots") >= 4,
-        slots("droneSlots") >= 3,
-        has_gun,
-    );
+    // A hull of four weapon slots carries a gun. The three Fed hulls ship the
+    // `<artillery>` tag and the mount that goes with it, at their nose; the rest
+    // ship neither, so the tag is filed here, in a room no other system of the
+    // ship was handed, and the mount is written into the layout by `fit_gun`.
+    let shipped_gun = systems.iter().find(|element| element.name == "artillery");
+    let mut gun_room = shipped_gun.and_then(|element| room_of(text, element));
+    let mut declares_gun = shipped_gun.is_some();
+    if four_slots && !declares_gun {
+        gun_room = add_gun(
+            text,
+            &systems,
+            &blueprint.layout,
+            archive,
+            &drawn,
+            patches,
+            warnings,
+        );
+        declares_gun = gun_room.is_some();
+        if declares_gun {
+            guns.insert(blueprint.layout.clone());
+        }
+    }
 
     // The systems first: a room and an art were chosen for each of them already,
     // so only `power` and `start` move here.
@@ -255,7 +306,11 @@ fn loadout(
     }
     // A player ship declares all sixteen. A system that is not declared cannot be
     // bought later and its room is drawn wrong, so it is said out loud, not fixed.
+    // The gun is the one system a hull may be given here rather than declare.
     for (name, _) in &drawn.systems {
+        if *name == "artillery" && declares_gun {
+            continue;
+        }
         if !systems.iter().any(|element| element.name == *name) {
             warnings.push(format!(
                 "{} starts a {name}, which its blueprint does not declare: the ship can neither fit nor buy it",
@@ -331,8 +386,241 @@ fn loadout(
         reactor: drawn.reactor,
         missiles: drawn.missiles,
         drone_parts: drawn.drone_parts,
-        artillery: drawn.artillery_weapon.to_string(),
+        // The draw picks a gun name as soon as it rolls for one, even when the
+        // level it rolls with is 0, so the report follows the system list.
+        artillery: match drawn.systems.iter().any(|(name, _)| *name == "artillery") {
+            true => drawn.artillery_weapon.to_string(),
+            false => String::new(),
+        },
+        gun_room,
     })
+}
+
+/// File an `<artillery>` in the `<systemList>` of a hull the game ships without
+/// one, and hand back the room it was put in: a room of the layout no other system
+/// of the ship stands in, the shape the art of a gun room was cut for when the
+/// layout has one free.
+///
+/// The tag is filed for every hull of four weapon slots, whether the draw started
+/// the gun or not: the room is taken either way, and a system the ship does not
+/// start is filed `start="false"` like the twelve other systems of a shipped hull
+/// that are. The `weapon` is named even then, since the game reads it off the
+/// system when the ship is loaded.
+fn add_gun(
+    text: &str,
+    systems: &[Element],
+    layout: &str,
+    archive: &FtlArchive,
+    drawn: &RandomizedShip,
+    patches: &mut Patches,
+    warnings: &mut Vec<String>,
+) -> Option<usize> {
+    // The system that ends last rather than the one that reads last: the walk
+    // hands back a system that files a `<slot>` only once its children came to an
+    // end, so the two orders are not the order of the file.
+    let Some(last) = systems.iter().max_by_key(|element| element.span.end) else {
+        warnings.push(format!(
+            "the {layout} hull has no system list to file a gun in"
+        ));
+        return None;
+    };
+    let taken: Vec<usize> = systems.iter().filter_map(|element| room_of(text, element)).collect();
+    let room = free_room(archive, layout, &taken, warnings)?;
+    // A gun the draw did not pick stands at the level of a system the ship does not
+    // start, which is the same number as the lowest level one that it does: the
+    // system list says which of the two it is, the level alone does not.
+    let started = drawn.systems.iter().find(|(name, _)| *name == "artillery");
+    let level = started.map_or(UNINSTALLED, |(_, level)| *level);
+    let state = match started {
+        Some(_) => "true",
+        None => "false",
+    };
+    // The two guns the game ships; the draw leaves the name empty when it rolled no
+    // gun at all, which is the common case of a hull that starts without one.
+    let weapon = match drawn.artillery_weapon {
+        "" => "ARTILLERY_FED",
+        name => name,
+    };
+    let edge = blueprints::indent_before(text, last.span.start);
+    let nl = newline(text);
+    patches.insert(
+        last.span.end,
+        &format!("{nl}{edge}<artillery power=\"{level}\" room=\"{room}\" start=\"{state}\" weapon=\"{weapon}\"/>"),
+    );
+    Some(room)
+}
+
+/// A room of the layout that no system of the ship was filed in, `None` when the
+/// hull has none left.
+///
+/// Every layout is drawn with the three spare rooms of `rooms::SPARE_ROOMS` over
+/// what the systems of its ships need, so a free one is nearly always going. The
+/// gun stands in a 2x1 room when one is free and in a 2x2 after that, which are the
+/// two shapes the Fed hulls file their gun in - `room_artillery.png` measures 70x35
+/// pixels, two tiles by one, and it is the only art of a gun room the game holds.
+/// A hull whose spare rooms are all thin takes one of those: the art leans over its
+/// wall by a tile, and a room the gun does not stand in at all is the worse of the
+/// two.
+fn free_room(
+    archive: &FtlArchive,
+    layout: &str,
+    taken: &[usize],
+    warnings: &mut Vec<String>,
+) -> Option<usize> {
+    let path = layout_txt(layout);
+    let bytes = match archive.get_file(&path) {
+        Some(bytes) => bytes,
+        None => {
+            warnings.push(format!("{path} is not in the archive, so the gun of the {layout} hull has no room to stand in"));
+            return None;
+        }
+    };
+    let rooms = match ShipTxt::parse(bytes.to_vec()) {
+        Ok(txt) => txt.rooms,
+        Err(why) => {
+            warnings.push(format!("{path}: {why}, so the gun of the {layout} hull has no room to stand in"));
+            return None;
+        }
+    };
+    let free: Vec<usize> = (0..rooms.len()).filter(|id| !taken.contains(id)).collect();
+    let shaped = |want: (i32, i32)| {
+        free.iter()
+            .copied()
+            .find(|id| (rooms[*id].w, rooms[*id].h) == want)
+    };
+    let room = shaped((2, 1)).or_else(|| shaped((2, 2))).or_else(|| free.first().copied());
+    if room.is_none() {
+        warnings.push(format!(
+            "every room of the {layout} hull stands under a system, so it gets no gun"
+        ));
+    }
+    room
+}
+
+/// The room number a system tag files, `None` when it files none or one that is
+/// not a number.
+fn room_of(text: &str, element: &Element) -> Option<usize> {
+    let (_, value) = blueprints::attribute(&text[element.tag.clone()], "room")?;
+    value.parse().ok()
+}
+
+/// Give the layout of a hull that carries a gun the mount the game draws it from,
+/// and report whether the file was written.
+///
+/// The game takes the fifth `<mount>` of the layout file for the gun and the four
+/// before it for the weapon slots, and a ship whose file holds four mounts fires
+/// its gun from beyond the left of the screen (`reference/ship_modding.txt`). Only
+/// the three Fed hulls ship a fifth one, at their nose; the mount of the rest is
+/// put halfway between the two that are furthest forward, which is on the hull
+/// between the two turrets it leans on. It slides neither way, since the two it
+/// sits between slide apart, and it turns like the first mount of the file and
+/// rides off with the same gib.
+fn fit_gun(archive: &mut FtlArchive, layout: &str, warnings: &mut Vec<String>) -> bool {
+    let path = layout_xml(layout);
+    let Some(bytes) = archive.get_file(&path) else {
+        warnings.push(format!("{path} is not in the archive, so the {layout} gun has no mount to be written in"));
+        return false;
+    };
+    let Ok(text) = String::from_utf8(bytes.to_vec()) else {
+        warnings.push(format!("{path} is not utf8, so the mount of the {layout} gun stayed where it was"));
+        return false;
+    };
+    let text = text.as_str();
+    let inside = match blueprints::elements(text, 0) {
+        Ok(inside) => inside,
+        Err(why) => {
+            warnings.push(format!("{path}: {why}"));
+            return false;
+        }
+    };
+    let Some(list) = inside.iter().find(|element| element.name == "weaponMounts") else {
+        warnings.push(format!("{path} files no <weaponMounts>, so the {layout} gun has nowhere to be put"));
+        return false;
+    };
+    let mounts: Vec<&Element> = inside
+        .iter()
+        .filter(|mount| {
+            mount.name == "mount" && mount.span.start > list.span.start && mount.span.end < list.span.end
+        })
+        .collect();
+    let point = |mount: &Element| -> Option<(i32, i32)> {
+        let tag = &text[mount.tag.clone()];
+        let number = |key: &str| {
+            blueprints::attribute(tag, key).and_then(|(_, value)| value.parse::<i32>().ok())
+        };
+        Some((number("x")?, number("y")?))
+    };
+    let pairs: Vec<((i32, i32), (i32, i32))> = mounts
+        .chunks(2)
+        .filter_map(|pair| {
+            Some((pair.first().copied().and_then(point)?, pair.get(1).copied().and_then(point)?))
+        })
+        .collect();
+    // The gun belongs at the nose, and a hull faces right, so the pair to stand
+    // between is the two weapon mounts furthest along x - which is not always the
+    // pair the file numbers first: the three Rock hulls file their rear pair before
+    // their forward one, and every other hull files the forward pair first.
+    let sum = |pair: &((i32, i32), (i32, i32))| pair.0 .0 + pair.1 .0;
+    let (first, second) = match pairs.first() {
+        Some(near) => *pairs.get(1).filter(|far| sum(far) > sum(near)).unwrap_or(near),
+        None => {
+            warnings.push(format!(
+                "{path} holds no pair of mounts that both number their x and their y, so the {layout} gun has nowhere to be put"
+            ));
+            return false;
+        }
+    };
+    let middle = |a: i32, b: i32| ((a + b) as f64 / 2.0).round() as i32;
+    let (x, y) = (middle(first.0, second.0), middle(first.1, second.1));
+
+    let mut patches = Patches::default();
+    match mounts.get(4) {
+        // A fifth mount is already filed there: the Kestrel and the Crystal hulls
+        // ship four that the game never reads, left in the files by the testing of
+        // the gun. The number the game reads for the gun is moved to the nose, and
+        // the rest of its tag is left as it was typed.
+        Some(fifth) => {
+            write_attribute(text, fifth, "x", &x.to_string(), &mut patches);
+            write_attribute(text, fifth, "y", &y.to_string(), &mut patches);
+        }
+        None if mounts.len() < 4 => {
+            warnings.push(format!(
+                "{path} files {} mounts, which is not the four weapon slots of the {layout} hull plus a gun",
+                mounts.len()
+            ));
+            return false;
+        }
+        None => {
+            let last = mounts.last().expect("a mount was read off the file");
+            let edge = blueprints::indent_before(text, last.span.start);
+            let nl = newline(text);
+            // The turn and the gib of the mount that leads the file: every weapon of
+            // this hull turns the same way and rides off with the same wreck.
+            let first_tag = &text[mounts[0].tag.clone()];
+            let keep = |key: &str, fallback: &str| {
+                blueprints::attribute(first_tag, key)
+                    .map(|(_, value)| value.to_string())
+                    .unwrap_or_else(|| fallback.to_string())
+            };
+            patches.insert(
+                last.span.end,
+                &format!(
+                    "{nl}{edge}<mount x=\"{x}\" y=\"{y}\" rotate=\"{}\" mirror=\"false\" gib=\"{}\" slide=\"no\"/>",
+                    keep("rotate", "true"),
+                    keep("gib", "1")
+                ),
+            );
+        }
+    }
+    let whole = blueprints::rewrite(text, &patches.into_edits());
+    // The Kestrel of a file that already stands the gun where the middle of its
+    // first two mounts is, and every hull that needed no edit at all, is not a file
+    // the run changed.
+    if whole == text.as_bytes() {
+        return false;
+    }
+    archive.set_file(&path, whole);
+    true
 }
 
 /// The elements of a walk at one depth, in the order the file holds them.
@@ -342,17 +630,6 @@ fn below(inside: &[Element], depth: usize) -> Vec<Element> {
         .filter(|element| element.depth == depth)
         .cloned()
         .collect()
-}
-
-/// The text between the tags of the first child of `element`, `None` when it has
-/// none. `<weaponSlots>4</weaponSlots>` holds its number there.
-fn child_text(text: &str, inside: &[Element], element: &Element) -> Option<String> {
-    let child = inside.iter().find(|held| {
-        held.depth == element.depth + 1
-            && held.span.start > element.span.start
-            && held.span.end < element.span.end
-    })?;
-    between(text, child)
 }
 
 /// The text an element holds between its own two tags, trimmed. An element that
@@ -779,4 +1056,14 @@ fn holds(hay: &[u8], needle: &[u8]) -> bool {
 /// makes it a player ship test.
 fn base_image(layout: &str) -> String {
     format!("img/ship/{layout}_base.png")
+}
+
+/// The rooms and doors of a layout, which is where the room of a new gun is read.
+fn layout_txt(layout: &str) -> String {
+    format!("data/{layout}.txt")
+}
+
+/// The hull art placement and the weapon mounts of a layout.
+fn layout_xml(layout: &str) -> String {
+    format!("data/{layout}.xml")
 }

@@ -168,7 +168,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             row("drones", list(&ship.drones));
             row("augments", list(&ship.augments));
             if !ship.artillery.is_empty() {
-                row("gun", ship.artillery.clone());
+                let gun = match ship.gun_room {
+                    Some(room) => format!("{} in room {room}", ship.artillery),
+                    None => ship.artillery.clone(),
+                };
+                row("gun", gun);
             }
             let systems: Vec<String> = ship
                 .systems

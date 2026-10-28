@@ -224,7 +224,7 @@ pub struct RandomizedShip {
     pub crew: Vec<&'static str>, // 1-4 crewmates
     pub systems: Vec<(&'static str, usize)>,
     pub reactor: usize,
-    pub artillery_weapon: &'static str, // only used on ships that have artillery system (fed)
+    pub artillery_weapon: &'static str, // only used on ships that have artillery system
     pub missiles: i8,
     pub drone_parts: i8,
 }
@@ -240,7 +240,7 @@ pub struct Randomizer {
 }
 
 impl Randomizer {
-    pub fn randomize_ship(&self, rng: &mut Rng, has_4_weapons_slots: bool, has_3_drones_slots: bool, has_artillery: bool) -> RandomizedShip {
+    pub fn randomize_ship(&self, rng: &mut Rng, has_4_weapons_slots: bool, has_3_drones_slots: bool) -> RandomizedShip {
         debug_assert_eq!(self.starting_weapons_pool.len(), ALLOWED_STARTING_WEAPONS_NAMES.len());
         debug_assert_eq!(self.starting_drones_pool.len(), ALLOWED_STARTING_DRONES_NAMES.len());
         loop {
@@ -320,7 +320,7 @@ impl Randomizer {
             
             
             let mut additional_systems_to_add = rng.pick(&[50, 50, 20, 1]);
-            if has_artillery {
+            if has_4_weapons_slots && rng.below(4) == 0 {
                 additional_systems_to_add = additional_systems_to_add.saturating_sub(1);
                 let artillery_power = rng.pick(&[0, 2, 1]);
                 systems.push(("artillery", artillery_power));
@@ -430,7 +430,8 @@ impl Randomizer {
             
             if is_weapon_loadout_viable(&weapons, effective_missiles)
             || effective_drones >= MIN_EFFECTIVE_DRONES && is_drone_loadout_viable(&drones, &weapons)
-            || systems.iter().any(|(s, l)| *s == "teleporter" && *l > 0) && is_crew_tp_viable(&crew) {
+            || systems.iter().any(|(s, l)| *s == "teleporter" && *l > 0) && is_crew_tp_viable(&crew)
+            || systems.iter().any(|(s, l)| *s == "artillery" && *l > 0) {
                 systems.retain(|(_, l)| *l > 0); // Remove level 0 systems
                 return RandomizedShip {
                     augments,

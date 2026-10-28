@@ -98,8 +98,9 @@ fn draw(runs: usize, dat: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         "run", "crew", "wpns", "drns", "aug", "reactor", "levels"
     );
     for run in 0..runs {
-        // The four Kestrel style hulls: four weapon slots, two drone slots, no gun.
-        let ship = randomizer.randomize_ship(&mut rng, true, false, false);
+        // The four Kestrel style hulls: four weapon slots, two drone slots, and a
+        // gun now that a hull of four slots carries one.
+        let ship = randomizer.randomize_ship(&mut rng, true, false);
         let levels: usize = ship.systems.iter().map(|(_, level)| level).sum();
         biggest = biggest.max(ship.reactor);
         if ship.reactor < levels {

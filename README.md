@@ -11,6 +11,11 @@ Go to [https://tails8521.github.io/ftl_randomizer/](https://tails8521.github.io/
 I tested it with [Slipstream Mod Manager](https://www.subsetgames.com/forum/viewtopic.php?t=17102) but any of the more recently developed mod managers with Slipstream compatibility should also work.  
 Alternatively, you can save it as a patched `ftl.dat` if you don't want to use a mod manager, remember to back up your original `ftl.dat` first.  
 
+## Changelog
+
+1.0.0: Initial release
+1.1.0: Artillery in no longer exclusive to Federation ships, and is now considered as a viable loadout on its own (not great tho, mostly if you want a turtling challenge)
+
 ## Design decisions
 
 While it may have been interesting to have everything "fully random", I kinda wanted every run to be reasonably likely to be beatable even on Hard difficulty. I've written about it in [documentation/randomizer_ideas.md](documentation/randomizer_ideas.md) and the exact implementation is in [src/randomizer.rs](src/randomizer.rs).  
