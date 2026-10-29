@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ftl_mod::{FtlMod, Meta};
 use crate::rng::Rng;
-use crate::{FtlArchive, enemy_rooms, enemies, loadout, rooms, ship_art};
+use crate::{FtlArchive, enemy_art, enemy_rooms, enemies, loadout, rooms, ship_art};
 
 /// What went wrong with a run. The passes each have their own error type, and a
 /// caller only ever shows the message, so they are kept as they are.
@@ -64,6 +64,8 @@ pub struct Outcome {
     pub foe_rooms: Option<enemy_rooms::Report>,
     /// The loadout, when one was drawn.
     pub gear: Option<loadout::Report>,
+    /// The colours of the enemy ships, when they were turned.
+    pub foe_hues: Option<enemy_art::Report>,
     /// The guns of the enemy ships, when they were drawn.
     pub enemies: Option<enemies::Report>,
     /// Hue angle of each layout, for the report.
@@ -116,11 +118,17 @@ pub fn process<'a>(
         changed.extend(foes.changed.iter().cloned());
     }
     let mut hues = BTreeMap::new();
+    let mut foe_hues = None;
     if options.hue {
         let layouts: Vec<String> = rooms.ships.iter().map(|ship| ship.layout.clone()).collect();
         let art = ship_art::recolor(&mut archive, &mut rng, &layouts)?;
         hues = art.degrees;
         changed.extend(art.changed);
+        // The enemy ships turn too, one angle per ship rather than per art: the game
+        // draws the six boss layouts from three arts, and each of them is a ship.
+        let foes = enemy_art::recolor(&mut archive, &mut rng)?;
+        changed.extend(foes.changed.iter().cloned());
+        foe_hues = Some(foes);
     }
     if let Some(gear) = &gear {
         changed.extend(gear.changed.iter().cloned());
@@ -152,6 +160,7 @@ pub fn process<'a>(
             read,
             rooms,
             foe_rooms,
+            foe_hues,
             gear,
             enemies: guns,
             hues,

@@ -20,9 +20,10 @@ use crate::rng::Rng;
 use crate::{Error, FtlArchive};
 
 /// The angles a ship may turn by. Below one, or above the other, the ship looks
-/// exactly as the game shipped it, which is not what a randomiser is for.
-const TURN_MIN: i32 = 21;
-const TURN_MAX: i32 = 339;
+/// exactly as the game shipped it, which is not what a randomiser is for. The enemy
+/// ships are turned by an angle of the same span, see `crate::enemy_art`.
+pub(crate) const TURN_MIN: i32 = 21;
+pub(crate) const TURN_MAX: i32 = 339;
 
 /// What the recolor changed.
 #[derive(Debug)]
@@ -107,7 +108,8 @@ fn paints(path: &str, layout: &str) -> bool {
 }
 
 /// The colors of one ship's art, each with the color it turns to, by a key of the
-/// red, green and blue packed into one number.
+/// red, green and blue packed into one number. One per ship, shared between all of
+/// its files, which `crate::enemy_art` does the same way.
 ///
 /// [`rotate`] answers the same thing every time for one color and one angle, and
 /// the art is nearly a palette - about 2000 colors to a hull of 260 000 pixels -
@@ -116,13 +118,13 @@ fn paints(path: &str, layout: &str) -> bool {
 /// it got before, so no pixel moves; the map is looked up and filled but never
 /// walked, so its order cannot reach a pixel either. Measured by
 /// `src/bin/probe_profile.rs`, which lands on the same images either way.
-type Turned = HashMap<u32, [u8; 3], BuildHasherDefault<Spread>>;
+pub(crate) type Turned = HashMap<u32, [u8; 3], BuildHasherDefault<Spread>>;
 
 /// A hash of a number that already spreads over its bits: one multiply, and the
 /// top half is the answer. `std` hashes with SipHash, which costs more on this
 /// path than the color conversion a miss pays for.
 #[derive(Default)]
-struct Spread(u64);
+pub(crate) struct Spread(u64);
 
 impl Hasher for Spread {
     fn finish(&self) -> u64 {
@@ -142,7 +144,7 @@ impl Hasher for Spread {
 
 /// The image with its hue moved by `degrees`. Grey and black pixels have no hue,
 /// and are handed back unchanged.
-fn turn(bytes: &[u8], degrees: i32, hues: &mut Turned) -> Result<Vec<u8>, String> {
+pub(crate) fn turn(bytes: &[u8], degrees: i32, hues: &mut Turned) -> Result<Vec<u8>, String> {
     let mut image = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|error| error.to_string())?

@@ -23,8 +23,9 @@
 //! what makes the format understood rather than merely tolerated.
 
 pub mod blueprints;
-pub mod enemies;
+pub mod enemy_art;
 pub mod enemy_rooms;
+pub mod enemies;
 pub mod floor;
 pub mod ftl_mod;
 pub mod layout;

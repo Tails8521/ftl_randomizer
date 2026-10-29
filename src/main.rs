@@ -154,6 +154,48 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    if let Some(hues) = &drawn.foe_hues {
+        let files: usize = hues.ships.iter().map(|ship| ship.files).sum();
+        let copied: Vec<&str> = hues
+            .ships
+            .iter()
+            .filter(|ship| ship.into != ship.art)
+            .map(|ship| ship.layout.as_str())
+            .collect();
+        println!(
+            "\n{} enemy ships were turned by an angle of their own, {} images rewritten",
+            hues.ships.len(),
+            files,
+        );
+        if !copied.is_empty() {
+            println!(
+                "{} of them are drawn from a copy of an art the game shares out between \
+                 several ships: {}",
+                copied.len(),
+                copied.join(", "),
+            );
+        }
+        if args.loadout {
+            for ship in &hues.ships {
+                println!(
+                    "  {:<22}{:>4}{}  {:>4}°  {}",
+                    ship.layout,
+                    ship.art,
+                    if ship.into == ship.art {
+                        String::new()
+                    } else {
+                        format!(" -> {}", ship.into)
+                    },
+                    ship.degrees,
+                    ship.blueprints.join(", "),
+                );
+            }
+        }
+        for warning in &hues.warnings {
+            println!("warning: {warning}");
+        }
+    }
+
     if args.systems {
         for change in &report.moves {
             println!("\n{} on the {}", change.blueprint, change.layout);
