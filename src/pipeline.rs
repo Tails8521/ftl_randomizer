@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ftl_mod::{FtlMod, Meta};
 use crate::rng::Rng;
-use crate::{FtlArchive, loadout, rooms, ship_art};
+use crate::{FtlArchive, enemies, loadout, rooms, ship_art};
 
 /// What went wrong with a run. The passes each have their own error type, and a
 /// caller only ever shows the message, so they are kept as they are.
@@ -34,6 +34,8 @@ pub struct Options {
     pub hue: bool,
     /// Draw a new loadout for every hull.
     pub loadout: bool,
+    /// Give every enemy ship its guns from the whole pool.
+    pub enemies: bool,
 }
 
 impl Default for Options {
@@ -41,6 +43,7 @@ impl Default for Options {
         Options {
             hue: true,
             loadout: true,
+            enemies: true,
         }
     }
 }
@@ -56,6 +59,8 @@ pub struct Outcome {
     pub rooms: rooms::Report,
     /// The loadout, when one was drawn.
     pub gear: Option<loadout::Report>,
+    /// The guns of the enemy ships, when they were drawn.
+    pub enemies: Option<enemies::Report>,
     /// Hue angle of each layout, for the report.
     pub hues: BTreeMap<String, i32>,
     /// Every file the run rewrote.
@@ -85,6 +90,13 @@ pub fn process<'a>(
         false => None,
     };
 
+    // Then the enemy ships, who draw their guns out of the lists of the blueprint
+    // files rather than from a loadout of their own.
+    let guns = match options.enemies {
+        true => Some(enemies::randomize(&mut archive)?),
+        false => None,
+    };
+
     // Then the colors. Every layout turns by its own angle, its gibs with it.
     let mut changed: BTreeSet<String> = rooms.changed.iter().cloned().collect();
     let mut hues = BTreeMap::new();
@@ -96,6 +108,9 @@ pub fn process<'a>(
     }
     if let Some(gear) = &gear {
         changed.extend(gear.changed.iter().cloned());
+    }
+    if let Some(guns) = &guns {
+        changed.extend(guns.changed.iter().cloned());
     }
 
     let mut module = FtlMod::new();
@@ -121,6 +136,7 @@ pub fn process<'a>(
             read,
             rooms,
             gear,
+            enemies: guns,
             hues,
             changed: changed.into_iter().collect(),
             ftl: module.to_bytes(),

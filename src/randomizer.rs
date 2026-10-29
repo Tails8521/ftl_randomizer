@@ -88,6 +88,58 @@ pub const ALLOWED_STARTING_WEAPONS_NAMES : [&'static str; 51] = [
     "CRYSTAL_HEAVY_2", // Crystal Heavy II
 ];
 
+pub const ALLOWED_ENEMY_WEAPONS_NAMES : [&'static str; 43] = [
+    "LASER_BURST_1", // Basic Laser
+    "LASER_BURST_2_A", // Burst Laser I
+    "LASER_BURST_3", // Burst Laser II
+    "LASER_BURST_5", // Burst Laser III
+    "LASER_HEAVY_1", // Heavy Laser I
+    "LASER_HEAVY_2", // Heavy Laser II
+    "LASER_HULL_1", // Hull Laser I
+    "LASER_HULL_2", // Hull Laser II
+    "LASER_CHAINGUN", // Chain Laser
+    "LASER_CHAINGUN_2", // Chain Vulcan
+    "LASER_CHARGEGUN", // Laser Charger
+    "LASER_CHARGEGUN_2", // Laser Charger II
+
+    "SHOTGUN", // Flak I
+    "SHOTGUN_2", // Flak II
+
+    "MISSILES_1", // Leto Missiles
+    "MISSILES_2", // Artemis Missiles (enemy version)
+    "MISSILES_3", // Hermes Missile
+    "MISSILES_BREACH", // Breach Missiles
+    "MISSILES_HULL", // Hull Missile
+    "MISSILE_CHARGEGUN", // Swarm Missiles
+    "MISSILES_BURST", // Pegasus Missile
+
+    "BOMB_1", // Small Bomb
+    "BOMB_BREACH_2", // Breach Bomb II
+    "BOMB_FIRE", // Fire Bomb
+    "BOMB_ION", // Ion Bomb
+    "BOMB_STUN", // Stun Bomb
+    "BOMB_LOCK", // Lock Bomb
+
+    "ION_1", // Ion Blast I
+    "ION_4", // Ion Blast II
+    "ION_2", // Heavy Ion
+    "ION_STUN", // Ion Stunner
+    "ION_CHARGEGUN", // Ion Charger
+    "ION_CHAINGUN", // Chain Ion
+
+    "BEAM_1", // Mini Beam
+    "BEAM_LONG", // Pike Beam
+    "BEAM_HULL", // Hull Beam
+    "BEAM_2", // Halberd Beam
+    "BEAM_3", // Glaive Beam
+    "BEAM_FIRE", // Fire Beam
+
+    "CRYSTAL_BURST_1", // Crystal Burst I
+    "CRYSTAL_BURST_2", // Crystal Burst II
+    "CRYSTAL_HEAVY_1", // Crystal Heavy I
+    "CRYSTAL_HEAVY_2", // Crystal Heavy II
+];
+
 impl StartingWeapon {
     fn qualifies_as_good_enough<'a>(&self, effective_missiles: i8, mut other_weapons: impl Iterator<Item = &'a StartingWeapon>) -> bool {
         if self.weapon_type == WeaponType::BOMB {

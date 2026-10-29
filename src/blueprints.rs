@@ -1111,10 +1111,13 @@ pub struct Element {
 /// the file the ranges are meant for, which lets a slice of a file hand back file
 /// coordinates.
 ///
+/// Public because `src/bin/probe_enemy_weapons.rs` reads a blueprint file the same
+/// way the passes do.
+///
 /// quick-xml reports the byte just past each event, so a tag starts where its own
 /// text says it does. That is checked against the source: a range that does not
 /// spell the tag it claims is an error, not a guess.
-pub(crate) fn elements(text: &str, base: usize) -> Result<Vec<Element>, String> {
+pub fn elements(text: &str, base: usize) -> Result<Vec<Element>, String> {
     let mut reader = Reader::from_str(text);
     let mut stack: Vec<(String, Range<usize>)> = Vec::new();
     let mut out = Vec::new();

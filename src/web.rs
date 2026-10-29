@@ -114,11 +114,14 @@ fn whole(seed: f64) -> Result<u64, String> {
     }
 }
 
-/// The warnings of both passes, in the order the passes ran.
+/// The warnings of the passes that ran, in the order they ran.
 fn warnings(outcome: &pipeline::Outcome) -> Vec<String> {
     let mut warnings = outcome.rooms.warnings.clone();
     if let Some(gear) = &outcome.gear {
         warnings.extend(gear.warnings.iter().cloned());
+    }
+    if let Some(guns) = &outcome.enemies {
+        warnings.extend(guns.warnings.iter().cloned());
     }
     warnings
 }

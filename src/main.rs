@@ -12,10 +12,12 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ftl_randomizer::enemies;
 use ftl_randomizer::pipeline::{self, Options};
 
 const USAGE: &str = "\
-randomize the room layout and the loadout of the 28 player ships of an ftl.dat
+randomize the room layout and the loadout of the 28 player ships of an ftl.dat, and
+the guns the enemy ships draw from
 
 USAGE:
   ftl_randomizer [SEED] [OPTIONS]
@@ -31,9 +33,10 @@ OPTIONS:
   --no-ftl       do not write the mod
   --no-hue       leave the ship art its own colors
   --no-loadout   leave the weapons, drones, crew, augments and systems as they are
+  --no-enemies   leave the enemy ships the guns of their own faction
   --extract DIR  also unpack every file of the result under DIR
   --systems      print the room each system was moved into
-  --loadout      print what each ship starts with
+  --loadout      print what each ship starts with, and the enemy gun pool
   --help         this text
 
 Each ship is redrawn as it flies: the hull art is cut up and moved with the
@@ -46,6 +49,12 @@ definitions: which systems it starts with and at what level, its reactor power,
 its weapons and their missiles, its drones and their parts, its crew - of any
 race - and its augments, drawn so that the ship can break a shield or put crew
 aboard.
+
+The enemy ships are then given one gun list to draw from, holding every gun they
+are allowed to carry. The game picks the guns of each ship out of that list when
+the ship is spawned, so the same seed hands out different guns from run to run.
+A ship that files its guns one by one - a boss, a ship of a written event - keeps
+them.
 
 The .dat is a whole game archive: drop it over the one the game reads. The .ftl
 holds only the files that changed, which is what a mod manager wants.";
@@ -61,6 +70,8 @@ struct Args {
     /// Draw a loadout at all, and print the one that was drawn.
     loadout_pass: bool,
     loadout: bool,
+    /// Point the enemy ships at the whole gun pool.
+    enemies: bool,
     hue: bool,
 }
 
@@ -85,6 +96,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         &Options {
             hue: args.hue,
             loadout: args.loadout_pass,
+            enemies: args.enemies,
         },
     )?;
     println!(
@@ -190,6 +202,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("warning: {warning}");
         }
     }
+    if let Some(guns) = &drawn.enemies {
+        println!(
+            "\n{} enemy <weaponList>s draw from the {} list, which holds {} guns: {}",
+            guns.pointed,
+            enemies::LIST,
+            guns.entries,
+            guns.replaced.join(", "),
+        );
+        if args.loadout {
+            println!("  {with}", with = guns.guns.join(", "));
+        }
+        for warning in &guns.warnings {
+            println!("warning: {warning}");
+        }
+    }
 
     if let Some(path) = &args.dat {
         let packed = archive.to_bytes()?;
@@ -235,6 +262,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     let mut systems = false;
     let mut loadout_pass = true;
     let mut loadout = false;
+    let mut enemies = true;
     let mut hue = true;
 
     let mut at = 0;
@@ -253,6 +281,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             "--systems" => systems = true,
             "--loadout" => loadout = true,
             "--no-loadout" => loadout_pass = false,
+            "--no-enemies" => enemies = false,
             "--no-hue" => hue = false,
             other => {
                 seed = Some(other.parse().map_err(|_| {
@@ -276,6 +305,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
         systems,
         loadout_pass,
         loadout,
+        enemies,
         hue,
     })
 }
