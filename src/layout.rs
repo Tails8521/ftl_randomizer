@@ -8,6 +8,11 @@
 //! until one walk reaches every room, and an open side two tiles wide only has
 //! "no airlock" and "both airlocks" to draw from. The one thing a single growth
 //! pass can miss is the room count, so `grow` repeats the pass until it lands.
+//!
+//! The other half of this module moves the rooms of an enemy layout instead of
+//! growing new ones, because an enemy ship has to keep its rooms: [`rearrange`]
+//! walks the rooms onto new tiles and [`cluster_doors`] doors them, and both only
+//! ever leave a layout that is as legal as the one it started from.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -38,6 +43,11 @@ const JITTER: u64 = 14;
 const SEED_TRIES: usize = 12;
 /// Growth passes a hull is given to reach its room count.
 const GROWTH_PASSES: usize = 400;
+/// Sweeps of rooms an enemy layout is given when it is shuffled. Each sweep picks
+/// every room up and puts it down again somewhere that keeps the layout legal, so
+/// the walk cannot wander into a broken layout and needs no repair; the sweeps are
+/// what carries it away from the layout it started from.
+const SHUFFLE_SWEEPS: usize = 30;
 /// How often one layout may be slid towards its anchor before the pass is given
 /// up on. Each slide moves a room or the whole layout, so a handful is plenty.
 const SETTLE_TRIES: usize = 8;
@@ -113,8 +123,8 @@ pub struct Layout {
 pub fn generate(mask: &BTreeSet<Tile>, rng: &mut Rng, min_rooms: usize, anchor: Tile) -> Layout {
     let target = room_target(mask.len(), rng, min_rooms);
     let rooms = grow(mask, rng, target, anchor);
-    let mut doors = wall_doors(&rooms, rng);
-    link_rooms(&rooms, &mut doors, rng);
+    let mut doors = wall_doors(&rooms, None, rng);
+    link_rooms(&rooms, None, &mut doors, rng);
     doors.append(&mut airlocks(&rooms, mask, rng));
     Layout { rooms, doors }
 }
@@ -127,11 +137,24 @@ pub fn generate(mask: &BTreeSet<Tile>, rng: &mut Rng, min_rooms: usize, anchor: 
 /// `x = -img_x + HORIZONTAL`, `y = -img_y + VERTICAL`: the corner of the art from
 /// `<img>` in `<ship>.xml`, moved by the two keys of `<ship>.txt`.
 pub fn hull_mask(base: &RgbaImage, origin: (i32, i32)) -> BTreeSet<Tile> {
+    hull_paint(base, origin, (TILE * TILE) as usize)
+}
+
+/// The tiles of a base image with `painted` of their `TILE * TILE` pixels at full
+/// alpha. [`hull_mask`] is the case that asks for every pixel of the tile.
+///
+/// A player hull paints its rooms, so every tile of its inside is painted whole and
+/// nothing is given away by asking for all of them. The hull of an enemy ship is a
+/// silhouette cut on the tile grid, and the layouts the game ships with it stand on
+/// tiles that miss that silhouette by a bevel: asked for every pixel, 10 of the 41
+/// enemy layouts are left with no spare tile at all, and a room of such a layout has
+/// nowhere to be moved to. `src/bin/probe_enemy_rooms.rs` walks the layouts.
+pub fn hull_paint(base: &RgbaImage, origin: (i32, i32), painted: usize) -> BTreeSet<Tile> {
     let (width, height) = base.dimensions();
     let mut mask = BTreeSet::new();
     for ty in -2..=(height as i32 / TILE + 2) {
         for tx in -2..=(width as i32 / TILE + 2) {
-            if opaque(base, origin, tx, ty) {
+            if painted_over(base, origin, tx, ty) >= painted {
                 mask.insert((tx, ty));
             }
         }
@@ -139,15 +162,41 @@ pub fn hull_mask(base: &RgbaImage, origin: (i32, i32)) -> BTreeSet<Tile> {
     mask
 }
 
-fn opaque(base: &RgbaImage, origin: (i32, i32), tx: i32, ty: i32) -> bool {
+/// How many pixels of one tile of a base image are painted at full alpha. `TILE *
+/// TILE` when the tile stands whole inside the paint.
+pub fn painted_over(base: &RgbaImage, origin: (i32, i32), tx: i32, ty: i32) -> usize {
     let (width, height) = base.dimensions();
     let (x0, y0) = (origin.0 + tx * TILE, origin.1 + ty * TILE);
     if x0 < 0 || y0 < 0 || x0 + TILE > width as i32 || y0 + TILE > height as i32 {
-        return false;
+        return 0;
     }
     (y0..y0 + TILE)
         .flat_map(|y| (x0..x0 + TILE).map(move |x| (x, y)))
-        .all(|(x, y)| base.get_pixel(x as u32, y as u32)[3] == 255)
+        .filter(|&(x, y)| base.get_pixel(x as u32, y as u32)[3] == 255)
+        .count()
+}
+
+/// Where a hull art file stands on the room grid: the pixel of the file that sits
+/// on grid pixel `(0, 0)`.
+///
+/// `<img x y>` names the corner of the box the layout file declares for the hull
+/// and `<img w h>` the size of that box. The art of a player ship fills its box,
+/// so the corner of the file is the corner of the box and this is [`hull_mask`]'s
+/// origin unchanged. The art of an enemy ship is cropped to its own paint, and the
+/// game centres the file in the declared box; the crop has to be put back before
+/// anyone can tell which tiles the hull paints. Measured over the 41 enemy layouts:
+/// with the centre kept, every tile under their rooms has paint on it and 0.8% of
+/// the pixels of their rooms fall off the hull, with the corner kept instead it is
+/// 11%.
+pub fn art_origin(img: (i32, i32), declared: Option<(i32, i32)>, file: (u32, u32)) -> (i32, i32) {
+    let crop = |pair: (i32, i32)| {
+        (
+            (pair.0 - file.0 as i32) / 2,
+            (pair.1 - file.1 as i32) / 2,
+        )
+    };
+    let (left, top) = declared.map(crop).unwrap_or((0, 0));
+    (-(img.0 + left), -(img.1 + top))
 }
 
 // ------------------------------------------------------------------- rooms --
@@ -620,9 +669,16 @@ fn walls(rooms: &[Room]) -> BTreeMap<(usize, usize), Vec<Pair>> {
 
 /// The doors between rooms. Each wall draws its own count from
 /// [`WALL_DOOR_ODDS`], and the spots the doors go on are drawn too.
-fn wall_doors(rooms: &[Room], rng: &mut Rng) -> Vec<Door> {
+///
+/// `cluster` is `Some` for a layout whose rooms are clustered, like an enemy ship
+/// whose oxygen room is sealed off from the rest: two rooms of two clusters share
+/// no door, because a door would put the two clusters on one walkable ship.
+fn wall_doors(rooms: &[Room], cluster: Option<&[usize]>, rng: &mut Rng) -> Vec<Door> {
     let mut doors = Vec::new();
     for ((left, right), wall) in walls(rooms) {
+        if cluster.is_some_and(|group| group[left] != group[right]) {
+            continue;
+        }
         let count = rng.pick(WALL_DOOR_ODDS[wall.len() - 1]);
         for spot in spots(count, wall.len(), rng) {
             let (one, two) = wall[spot];
@@ -635,13 +691,16 @@ fn wall_doors(rooms: &[Room], rng: &mut Rng) -> Vec<Door> {
 /// Add doors until one walk over built doors reaches every room. The wall odds
 /// above can leave a room with no door at all. This only ever adds, and it always
 /// finishes, because the rooms are connected through shared walls by how they
-/// were grown.
-fn link_rooms(rooms: &[Room], doors: &mut Vec<Door>, rng: &mut Rng) {
+/// were grown - and, with a `cluster`, because each cluster was walked into one
+/// connected group of rooms, which is what [`rearrange`] guarantees.
+fn link_rooms(rooms: &[Room], cluster: Option<&[usize]>, doors: &mut Vec<Door>, rng: &mut Rng) {
     let walls = walls(rooms);
     loop {
         let group = groups(rooms.len(), doors);
         // The first wall that joins two groups, in room id order.
-        let Some((pair, wall)) = walls.iter().find(|((a, b), _)| group[*a] != group[*b]) else {
+        let Some((pair, wall)) = walls.iter().find(|((a, b), _)| {
+            cluster.is_none_or(|at| at[*a] == at[*b]) && group[*a] != group[*b]
+        }) else {
             return;
         };
         // A wall between two groups cannot be full of doors, a door would have
@@ -744,6 +803,189 @@ fn spots(count: usize, total: usize, rng: &mut Rng) -> Vec<usize> {
         chosen.push(pool.swap_remove(rng.index(pool.len())));
     }
     chosen
+}
+
+// ------------------------------------------------------------- moved rooms --
+
+/// A layout whose rooms are moved rather than grown: the same rooms, in the same
+/// order and of the same shape, standing on new tiles of the same hull.
+///
+/// A room keeps its place in the list and its size because a blueprint names the
+/// room every system of an enemy ship sits in, and the game draws the look of a
+/// system for the shape of the room it stands in.
+pub struct Fixed<'a> {
+    /// The rooms of the layout as it ships, in id order.
+    pub rooms: &'a [Room],
+    /// The tiles a room may stand on.
+    pub mask: &'a BTreeSet<Tile>,
+    /// Which cluster each room belongs to, one entry per room. The rooms of one
+    /// cluster have to be walkable from each other through the walls they share,
+    /// and rooms of two clusters must never be joined by a door.
+    pub cluster: &'a [usize],
+    /// The low corner of the box the layout ships in. The game hangs the hull art
+    /// off the low corner of the rooms, so the shuffled layout has to begin on both
+    /// of its lines and step neither left of nor above them, or the whole ship
+    /// slides sideways.
+    pub anchor: Tile,
+    /// `Some(rank)` for the rooms that have to keep their left to right order - the
+    /// boss's gun pods - with the lowest rank furthest left, and `None` for every
+    /// other room.
+    pub rank: &'a [Option<usize>],
+}
+
+/// Move the rooms of a layout about inside the hull they already fit in.
+///
+/// Each sweep takes the rooms in a random order and stands each one on a place it
+/// can go to without breaking the layout. The layout the walk starts from is
+/// legal, so every layout it passes through is legal, and a hull with nowhere to
+/// put a room hands back the one it was given.
+pub fn rearrange(fixed: &Fixed, rng: &mut Rng) -> Vec<Room> {
+    let mut rooms = fixed.rooms.to_vec();
+    for _ in 0..SHUFFLE_SWEEPS {
+        let mut order: Vec<usize> = (0..rooms.len()).collect();
+        rng.shuffle(&mut order);
+        for index in order {
+            if let Some(moved) = park(fixed, &rooms, index, rng) {
+                rooms[index] = moved;
+            }
+        }
+    }
+    rooms
+}
+
+/// Where room `index` can be put down that keeps the layout legal, every place but
+/// the one it stands on, drawn at random. `None` when there is nowhere else for it.
+fn park(fixed: &Fixed, rooms: &[Room], index: usize, rng: &mut Rng) -> Option<Room> {
+    let room = rooms[index];
+    let (low, high) = board(fixed.mask);
+    let mut free: Vec<Room> = Vec::new();
+    for y in low.1..=high.1 - room.h + 1 {
+        for x in low.0..=high.0 - room.w + 1 {
+            let trial = Room { x, y, ..room };
+            if trial != room && holds(fixed, rooms, index, trial) {
+                free.push(trial);
+            }
+        }
+    }
+    if free.is_empty() {
+        return None;
+    }
+    let pick = rng.index(free.len());
+    Some(free.swap_remove(pick))
+}
+
+/// true when the layout is legal with room `index` standing at `trial`: inside the
+/// hull, with nothing on top of it, its cluster walkable, the ranked rooms in order
+/// and the box of the layout still beginning on its two anchor lines.
+fn holds(fixed: &Fixed, rooms: &[Room], index: usize, trial: Room) -> bool {
+    let at = |pick: usize| -> Room {
+        if pick == index { trial } else { rooms[pick] }
+    };
+    if !trial.tiles().all(|tile| fixed.mask.contains(&tile)) {
+        return false;
+    }
+    if (0..rooms.len()).any(|other| other != index && overlaps(&trial, &rooms[other])) {
+        return false;
+    }
+    // The hull art hangs off the low corner of the rooms, so the layout has to keep
+    // beginning on both anchor lines: no room may step left of or above one, and one
+    // room has to stay on each of them.
+    let lines = (0..rooms.len()).fold((true, true, false, false), |state, other| {
+        let room = at(other);
+        (
+            state.0 && room.x >= fixed.anchor.0,
+            state.1 && room.y >= fixed.anchor.1,
+            state.2 || room.x == fixed.anchor.0,
+            state.3 || room.y == fixed.anchor.1,
+        )
+    });
+    if !lines.0 || !lines.1 || !lines.2 || !lines.3 {
+        return false;
+    }
+    walkable(fixed, rooms, index, trial) && ranked(rooms, index, trial, fixed.rank)
+}
+
+/// true when the cluster room `index` belongs to stays walkable with that room at
+/// `trial`. The other clusters did not move and were walkable already.
+fn walkable(fixed: &Fixed, rooms: &[Room], index: usize, trial: Room) -> bool {
+    let group = fixed.cluster[index];
+    let plan: Vec<Room> = (0..rooms.len())
+        .filter(|&at| fixed.cluster[at] == group)
+        .map(|at| if at == index { trial } else { rooms[at] })
+        .collect();
+    let mut seen = vec![false; plan.len()];
+    let mut queue = vec![0];
+    seen[0] = true;
+    let mut walked = 1;
+    while let Some(at) = queue.pop() {
+        for other in 0..plan.len() {
+            if seen[other] || !touching(&plan[at], &plan[other]) {
+                continue;
+            }
+            seen[other] = true;
+            walked += 1;
+            queue.push(other);
+        }
+    }
+    walked == plan.len()
+}
+
+/// true when the ranked rooms stand furthest-left-first, each one further right
+/// than the room its rank follows. Rooms of no rank take no part.
+fn ranked(rooms: &[Room], index: usize, trial: Room, rank: &[Option<usize>]) -> bool {
+    let mut order: Vec<(usize, i32)> = rooms
+        .iter()
+        .enumerate()
+        .filter_map(|(at, room)| {
+            let stand = if at == index { trial } else { *room };
+            rank[at].map(|value| (value, stand.x))
+        })
+        .collect();
+    order.sort_unstable();
+    order.windows(2).all(|pair| pair[0].1 < pair[1].1)
+}
+
+/// The corners of the box a set of tiles fills, `(low, high)` both inclusive.
+fn board(tiles: &BTreeSet<Tile>) -> (Tile, Tile) {
+    let start = tiles.iter().next().copied().unwrap_or((0, 0));
+    tiles.iter().fold((start, start), |(low, high), &tile| {
+        (
+            (low.0.min(tile.0), low.1.min(tile.1)),
+            (high.0.max(tile.0), high.1.max(tile.1)),
+        )
+    })
+}
+
+/// true when two rooms share a wall. Touching at a corner alone is not enough:
+/// there is no door to draw in a corner.
+fn touching(one: &Room, two: &Room) -> bool {
+    let side = (one.x + one.w == two.x || two.x + two.w == one.x)
+        && meets(one.y, one.h, two.y, two.h);
+    let across = (one.y + one.h == two.y || two.y + two.h == one.y)
+        && meets(one.x, one.w, two.x, two.w);
+    side || across
+}
+
+/// true when two rooms stand on one tile.
+fn overlaps(one: &Room, two: &Room) -> bool {
+    meets(one.x, one.w, two.x, two.w) && meets(one.y, one.h, two.y, two.h)
+}
+
+/// true when the run `a .. a + length` reaches into the run `b .. b + length`.
+fn meets(a: i32, length_a: i32, b: i32, length_b: i32) -> bool {
+    a < b + length_b && b < a + length_a
+}
+
+/// The doors of a layout whose rooms are clustered: a door only in a wall two
+/// rooms of one cluster share, and enough of them for each cluster to be walkable
+/// on its own. No airlock: of the 41 enemy layouts the game ships, 36 file none,
+/// and the rooms of a shuffled layout stand on new tiles, so the few the others
+/// file are moved along with their room instead of drawn afresh.
+pub fn cluster_doors(rooms: &[Room], cluster: &[usize], rng: &mut Rng) -> Vec<Door> {
+    let group = Some(cluster);
+    let mut doors = wall_doors(rooms, group, rng);
+    link_rooms(rooms, group, &mut doors, rng);
+    doors
 }
 
 // ------------------------------------------------------------------ stations --

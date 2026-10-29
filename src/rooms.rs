@@ -337,7 +337,7 @@ fn redraw(
             why: error.to_string(),
         })?
         .to_rgba8();
-    let (img, _) = art_offsets(xml).map_err(|why| Error::Unreadable {
+    let offsets = art_offsets(xml).map_err(|why| Error::Unreadable {
         path: layout_xml(layout),
         why,
     })?;
@@ -349,8 +349,9 @@ fn redraw(
     // one of them stands on fully painted art, and with the two offsets added the
     // eight layouts that carry them spill 1% to 6% of their room pixels over the
     // hull edge. Rooms are stored as tiles, so this is all the art and the grid
-    // have to agree on.
-    let origin = (-img.0, -img.1);
+    // have to agree on. The art of a player ship fills the box `<img w h>` declares,
+    // so the crop [`layout::art_origin`] puts back is nothing here.
+    let origin = layout::art_origin(offsets.img, offsets.size, art.dimensions());
     let mask = layout::hull_mask(&art, origin);
     // Rooms stay inside the box the shipped layout used and start from its low
     // corner: the game hangs the hull art off the low corner of the room grid, so
@@ -411,12 +412,27 @@ fn redraw(
     })
 }
 
-/// Where the art of a ship sits, from its `<layout>.xml`: the `<img x= y=>` of
+/// Where the art of a layout sits on the room grid, read from its `<layout>.xml`.
+#[derive(Clone, Copy, Debug)]
+pub struct Art {
+    /// The corner of the hull art, as `<img x y>` gives it.
+    pub img: (i32, i32),
+    /// The box the hull art is declared to fill, as `<img w h>` gives it. The art
+    /// of an enemy ship is cropped to its paint and is drawn in the middle of that
+    /// box, so the file is smaller than this.
+    pub size: Option<(i32, i32)>,
+    /// The corner of the deck art under the rooms, as `<offsets><floor x y>` gives
+    /// it. The layouts of the enemy ships draw no deck of their own and file no
+    /// `<floor>`.
+    pub floor: Option<(i32, i32)>,
+}
+
+/// Where the art of a ship sits, from its `<layout>.xml`: the `<img x= y= w= h=>` of
 /// the hull, and the `<floor x= y=>` of the deck art under the rooms.
 ///
 /// Both are relative to the hull art, so their difference is where the deck sits
 /// in the room grid.
-fn art_offsets(xml: &[u8]) -> std::result::Result<((i32, i32), (i32, i32)), String> {
+pub fn art_offsets(xml: &[u8]) -> std::result::Result<Art, String> {
     let mut reader = Reader::from_reader(xml);
     let mut buffer = Vec::new();
     let mut img = None;
@@ -426,24 +442,29 @@ fn art_offsets(xml: &[u8]) -> std::result::Result<((i32, i32), (i32, i32)), Stri
             Ok(Event::Start(tag)) | Ok(Event::Empty(tag))
                 if matches!(tag.local_name().as_ref(), b"img" | b"floor") =>
             {
-                let mut x = None;
-                let mut y = None;
+                let mut at = (None, None);
+                let mut size = (None, None);
                 for attribute in tag.attributes().flatten() {
                     let value = String::from_utf8_lossy(&attribute.value).parse::<i32>().ok();
                     match attribute.key.as_ref() {
-                        b"x" => x = value,
-                        b"y" => y = value,
+                        b"x" => at.0 = value,
+                        b"y" => at.1 = value,
+                        b"w" => size.0 = value,
+                        b"h" => size.1 = value,
                         _ => {}
                     }
                 }
-                let pair = match (x, y) {
+                let pair = match at {
                     (Some(x), Some(y)) => (x, y),
                     _ => return Err(format!("<{}> has no x and y", String::from_utf8_lossy(tag.local_name().as_ref()))),
                 };
                 // The one layout file that holds a second, commented out pair is
                 // read as one, because the reader never hands back a comment.
                 if tag.local_name().as_ref() == b"img" {
-                    img = Some(pair);
+                    img = Some((pair, match size {
+                        (Some(w), Some(h)) => Some((w, h)),
+                        _ => None,
+                    }));
                 } else {
                     deck = Some(pair);
                 }
@@ -453,19 +474,24 @@ fn art_offsets(xml: &[u8]) -> std::result::Result<((i32, i32), (i32, i32)), Stri
             Err(error) => return Err(error.to_string()),
         }
     }
-    match (img, deck) {
-        (Some(img), Some(deck)) => Ok((img, deck)),
-        (None, _) => Err("no <img> in the layout file".to_string()),
-        (_, None) => Err("no <floor> in the layout file".to_string()),
-    }
+    let Some((img, size)) = img else {
+        return Err("no <img> in the layout file".to_string());
+    };
+    // Only the hull art declares a box: `<floor>` carries its offset alone, so a
+    // layout whose `<img>` names no size is read as art that fills its own box.
+    Ok(Art { img, size, floor: deck })
 }
 
 /// The grid pixel the deck canvas stands on: what `<offsets><floor x y>` says,
 /// moved into the room grid, whose corner is the hull art corner `<img x y>`
 /// names. Grid pixels are 35 to a tile.
 pub fn deck_offset(xml: &[u8]) -> std::result::Result<(i32, i32), String> {
-    let ((img_x, img_y), (x, y)) = art_offsets(xml)?;
-    Ok((x - -img_x, y - -img_y))
+    let art = art_offsets(xml)?;
+    let (x, y) = match art.floor {
+        Some(deck) => deck,
+        None => return Err("no <floor> in the layout file".to_string()),
+    };
+    Ok((x - -art.img.0, y - -art.img.1))
 }
 
 /// The size of the hull art of a layout, which is the canvas a ship with no deck

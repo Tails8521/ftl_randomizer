@@ -1,4 +1,5 @@
-//! Give every player ship a new room layout and a new loadout.
+//! Give every player ship a new room layout and a new loadout, move the rooms of
+//! the enemy ships about their own hulls, and hand the enemy guns a new pool.
 //!
 //! All filesystem access lives here. The library only ever sees bytes: the archive
 //! is read into a buffer, edited in memory, and written back out as a `.dat` for a
@@ -72,6 +73,8 @@ struct Args {
     loadout: bool,
     /// Point the enemy ships at the whole gun pool.
     enemies: bool,
+    /// Move the rooms of the enemy ships about their own hulls.
+    foe_rooms: bool,
     hue: bool,
 }
 
@@ -97,6 +100,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             hue: args.hue,
             loadout: args.loadout_pass,
             enemies: args.enemies,
+            enemy_rooms: args.foe_rooms,
         },
     )?;
     println!(
@@ -133,6 +137,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             format!("{}{}", ship.deck, if ship.shipped { "" } else { "+" }),
             ship.blueprints.join(", ")
         );
+    }
+
+    if let Some(foes) = &drawn.foe_rooms {
+        let moved: usize = foes.ships.iter().map(|ship| ship.moved).sum();
+        let rooms: usize = foes.ships.iter().map(|ship| ship.rooms).sum();
+        println!(
+            "\n{} enemy layouts had their rooms stood on new tiles of their own hull: {} \
+             of their {} rooms changed place, and their doors were drawn again",
+            foes.ships.len(),
+            moved,
+            rooms,
+        );
+        for warning in &foes.warnings {
+            println!("warning: {warning}");
+        }
     }
 
     if args.systems {
@@ -263,6 +282,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
     let mut loadout_pass = true;
     let mut loadout = false;
     let mut enemies = true;
+    let mut foe_rooms = true;
     let mut hue = true;
 
     let mut at = 0;
@@ -282,6 +302,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
             "--loadout" => loadout = true,
             "--no-loadout" => loadout_pass = false,
             "--no-enemies" => enemies = false,
+            "--no-foe-rooms" => foe_rooms = false,
             "--no-hue" => hue = false,
             other => {
                 seed = Some(other.parse().map_err(|_| {
@@ -306,6 +327,7 @@ fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
         loadout_pass,
         loadout,
         enemies,
+        foe_rooms,
         hue,
     })
 }

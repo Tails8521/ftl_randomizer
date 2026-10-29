@@ -24,6 +24,7 @@
 
 pub mod blueprints;
 pub mod enemies;
+pub mod enemy_rooms;
 pub mod floor;
 pub mod ftl_mod;
 pub mod layout;

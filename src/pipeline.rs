@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ftl_mod::{FtlMod, Meta};
 use crate::rng::Rng;
-use crate::{FtlArchive, enemies, loadout, rooms, ship_art};
+use crate::{FtlArchive, enemy_rooms, enemies, loadout, rooms, ship_art};
 
 /// What went wrong with a run. The passes each have their own error type, and a
 /// caller only ever shows the message, so they are kept as they are.
@@ -36,6 +36,8 @@ pub struct Options {
     pub loadout: bool,
     /// Give every enemy ship its guns from the whole pool.
     pub enemies: bool,
+    /// Move the rooms of every enemy ship about inside its own hull.
+    pub enemy_rooms: bool,
 }
 
 impl Default for Options {
@@ -44,6 +46,7 @@ impl Default for Options {
             hue: true,
             loadout: true,
             enemies: true,
+            enemy_rooms: true,
         }
     }
 }
@@ -57,6 +60,8 @@ pub struct Outcome {
     pub read: usize,
     /// Rooms, doors and deck art.
     pub rooms: rooms::Report,
+    /// The rooms of the enemy ships, when they were moved.
+    pub foe_rooms: Option<enemy_rooms::Report>,
     /// The loadout, when one was drawn.
     pub gear: Option<loadout::Report>,
     /// The guns of the enemy ships, when they were drawn.
@@ -84,6 +89,14 @@ pub fn process<'a>(
 
     let rooms = rooms::randomize(&mut archive, &mut rng)?;
 
+    // Then the enemy ships, whose rooms are moved rather than drawn again: a
+    // blueprint names their systems by room number, and the game draws the look of a
+    // system for the shape of the room it stands in.
+    let foe_rooms = match options.enemy_rooms {
+        true => Some(enemy_rooms::randomize(&mut archive, &mut rng)?),
+        false => None,
+    };
+
     // Then what the ships start with, into the rooms they now have.
     let gear = match options.loadout {
         true => Some(loadout::randomize(&mut archive, &mut rng)?),
@@ -99,6 +112,9 @@ pub fn process<'a>(
 
     // Then the colors. Every layout turns by its own angle, its gibs with it.
     let mut changed: BTreeSet<String> = rooms.changed.iter().cloned().collect();
+    if let Some(foes) = &foe_rooms {
+        changed.extend(foes.changed.iter().cloned());
+    }
     let mut hues = BTreeMap::new();
     if options.hue {
         let layouts: Vec<String> = rooms.ships.iter().map(|ship| ship.layout.clone()).collect();
@@ -135,6 +151,7 @@ pub fn process<'a>(
             seed,
             read,
             rooms,
+            foe_rooms,
             gear,
             enemies: guns,
             hues,
