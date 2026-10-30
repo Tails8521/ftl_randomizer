@@ -81,7 +81,9 @@
 
 <label id="drop" for="file" tabindex="0">
   <strong id="dropTitle">Drop your ftl.dat here, or click to choose it</strong>
-  <span class="hint" id="dropHint">the game's own archive, about 270 MiB - inside the FTL folder</span>
+  <span class="hint" id="dropHint">Inside the FTL folder e.g.<br />
+    C:\Program Files (x86)\Steam\steamapps\common\FTL Faster Than Light\ftl.dat
+  </span>
 </label>
 <input id="file" type="file" accept=".dat" hidden>
 
@@ -96,8 +98,7 @@
 
 <div class="row">
   <button id="ftl" disabled>Save .ftl mod</button>
-  <p><strong>Recommended.</strong> A mod for a mod manager: only the files that changed,
-     and the game's own ftl.dat is left alone.</p>
+  <p><strong>Recommended.</strong> A mod for a mod manager: only the files that changed.</p>
 </div>
 
 <div class="row">
@@ -106,7 +107,7 @@
      <strong>Back your original ftl.dat up first</strong></p>
 </div>
 
-<footer>Nothing leaves your computer: the archive is read and written in this tab, no additional upload or download.</footer>
+<footer>This page doesn't upload or download any additional file, the patching process happens locally inside your browser.</footer>
 
 <script>
 const drop = document.getElementById('drop');
