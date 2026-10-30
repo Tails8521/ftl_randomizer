@@ -15,6 +15,7 @@ Alternatively, you can save it as a patched `ftl.dat` if you don't want to use a
 
 1.0.0: Initial release
 1.1.0: Artillery in no longer exclusive to Federation ships, and is now considered as a viable loadout on its own (not great tho, mostly if you want a turtling challenge)
+2.0.0: Enemy ships are now randomized too
 
 ## Design decisions
 
